@@ -19,6 +19,7 @@ class TestGlobalIndexes(Tester):
         return session
 
     def carl_prepare(self):
+        cluster = self.cluster
         cluster.populate(3).start()
         node1 = cluster.nodelist()[0]
 
@@ -28,7 +29,7 @@ class TestGlobalIndexes(Tester):
         self.create_cf(session, 'users', columns=columns)
 
         # create index
-        session.execute("CREATE GLOBAL INDEX ON ks.users (state) DENORMALIZED (password, session_token);")
+        session.execute("CREATE GLOBAL INDEX ON ks.users (state) INCLUDE (password, session_token);")
 
         return session
 
@@ -40,7 +41,7 @@ class TestGlobalIndexes(Tester):
         for i in xrange(10000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
 
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         #Should not be able to query an index until it is built.
         for i in xrange(10000):
@@ -53,7 +54,7 @@ class TestGlobalIndexes(Tester):
     def drop_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
@@ -77,7 +78,7 @@ class TestGlobalIndexes(Tester):
                 pass
 
             session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-            session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+            session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
             for i in xrange(10):
                 session.execute("INSERT INTO t (id, v) VALUES (%d, 0)" % i)
@@ -90,7 +91,7 @@ class TestGlobalIndexes(Tester):
     def add_node_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
@@ -116,7 +117,7 @@ class TestGlobalIndexes(Tester):
     def drop_node_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
@@ -141,7 +142,7 @@ class TestGlobalIndexes(Tester):
     def add_dc_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
@@ -169,7 +170,7 @@ class TestGlobalIndexes(Tester):
     def test_8272(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v text)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (0, 'foo%s')" % i)
@@ -187,7 +188,7 @@ class TestGlobalIndexes(Tester):
     def global_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
-        session.execute("CREATE GLOBAL INDEX ON ON t (v) DENORMALIZED (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
             session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
@@ -268,10 +269,10 @@ class TestGlobalIndexes(Tester):
         session = self.carl_prepare()
 
         assert_invalid(session, "CREATE INDEX ON ks.users (state)")
-        assert_invalid(session, "CREATE GLOBAL INDEX ON ks.users (state) DENORMALIZED (password)")
+        assert_invalid(session, "CREATE GLOBAL INDEX ON ks.users (state) INCLUDE (password)")
 
         session.execute("CREATE INDEX ON ks.users (gender)")
-        assert_invalid(session, "CREATE GLOBAL INDEX ON ks.users (gender) DENORMALIZED (birth_year)")
+        assert_invalid(session, "CREATE GLOBAL INDEX ON ks.users (gender) INCLUDE (birth_year)")
 
     @since('3.0')
     def test_drop_indexed_table(self):
