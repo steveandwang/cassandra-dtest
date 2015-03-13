@@ -173,13 +173,13 @@ class TestGlobalIndexes(Tester):
         session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
 
         for i in xrange(1000):
-            session.execute("INSERT INTO t (id, v) VALUES (0, 'foo%s')" % i)
-
-        for i in xrange(1000):
-            insert_query = SimpleStatement("UPDATE t SET v = 'bar%s' WHERE id = 0" % i, ConsistencyLevel.QUORUM)
-
+            insert_query = SimpleStatement("INSERT INTO t (id, v) VALUES (%d, 'foo')" % i, ConsistencyLevel.ALL)
             session.execute(insert_query)
-            assert_none(session, "SELECT * from t WHERE v = 'foo%s'" % i, ConsistencyLevel.QUORUM)
+
+            update_query = SimpleStatement("UPDATE t SET v = 'bar' WHERE id = %d" % i, ConsistencyLevel.QUORUM)
+
+            session.execute(update_query)
+            assert_none(session, "SELECT * from t WHERE v = 'foo'", ConsistencyLevel.QUORUM)
 
 
     ##BASIC TESTS. COPY 2i tests from cql_tests here
