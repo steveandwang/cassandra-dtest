@@ -34,6 +34,30 @@ class TestGlobalIndexes(Tester):
 
         return session
 
+    def allow_filtering_test(self):
+        session = self.prepare()
+        session.execute("CREATE TABLE t (id int PRIMARY KEY, v int, v2 text, v3 decimal)")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
+        session.execute("CREATE GLOBAL INDEX ON t (v2) INCLUDE (*)")
+
+        for i in xrange(1000):
+            session.execute("INSERT INTO t (id, v, v2, v3) VALUES (%d, %d, 'a', 3.0)" % (i, i))
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE id = %d AND v = %d" % (i, i), [i, i, 'a', 3.0])
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i, 'a', 3.0])
+
+        rows = session.execute("SELECT * FROM t WHERE v2 = 'a'")
+        assert len(rows) == 1000, "Expected 1000 rows but got %d" % len(rows)
+
+        assert_invalid(session, "SELECT * FROM t WHERE v = %d AND v2 = 'a'" % i)
+        assert_invalid(session, "SELECT * FROM t WHERE v = %d AND v2 = 'a' ALLOW FILTERING" % i)
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE v = %d AND v3 = 3.0 ALLOW FILTERING" % i, [i, i, 'a', 3.0])
+
     def populate_index_after_insert_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
