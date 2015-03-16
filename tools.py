@@ -1,10 +1,12 @@
 from ccmlib.node import Node
 from decorator  import decorator
 from distutils.version import LooseVersion
-import re, os, sys, fileinput, time
+import re, os, sys, fileinput, time, unittest, functools
 
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
+
+from dtest import Tester, DISABLE_VNODES
 
 def rows_to_list(rows):
     new_list = [list(row) for row in rows]
@@ -148,13 +150,6 @@ def replace_in_file(filepath, search_replacements):
             line = re.sub(regex, replacement, line)
         sys.stdout.write(line)
 
-def not_implemented(f):
-    def wrapped(obj):
-        obj.skip("this test not implemented")
-        f(obj)
-    wrapped.__name__ = f.__name__
-    wrapped.__doc__ = f.__doc__
-    return wrapped
 
 class since(object):
     def __init__(self, cass_version, max_version=None):
@@ -163,38 +158,50 @@ class since(object):
         if self.max_version is not None:
             self.max_version = LooseVersion(self.max_version)
 
-    def __call__(self, f):
+    def _skip_msg(self, version):
+        if version < self.cass_version:
+            return "%s < %s" % (version, self.cass_version)
+        if self.max_version and version > self.max_version:
+            return "%s > %s" % (version, self.max_version)
+
+    def _wrap_setUp(self, cls):
+        backup_setUp_name = '_since_setUp'
+
+        @functools.wraps(cls.setUp)
         def wrapped(obj):
-            cluster_version = LooseVersion(obj.cluster.version())
-            if cluster_version < self.cass_version:
-                obj.skip("%s < %s" % (cluster_version, self.cass_version))
-            if self.max_version and cluster_version > self.max_version:
-                obj.skip("%s > %s" % (cluster_version, self.max_version))
+            getattr(obj, backup_setUp_name)()
+            version = LooseVersion(obj.cluster.version())
+            msg = self._skip_msg(version)
+            if msg:
+                obj.skip(msg)
+
+        setattr(cls, backup_setUp_name, cls.setUp)
+        cls.setUp = wrapped
+        return cls
+
+    def _wrap_function(self, f):
+        @functools.wraps(f)
+        def wrapped(obj):
+            version = LooseVersion(obj.cluster.version())
+            msg = self._skip_msg(version)
+            if msg:
+                obj.skip(msg)
             f(obj)
-        wrapped.__name__ = f.__name__
-        wrapped.__doc__ = f.__doc__
         return wrapped
 
-from dtest import DISABLE_VNODES
-# Use this decorator to skip a test when vnodes are enabled.
-class no_vnodes(object):
-    def __call__(self, f):
-        def wrapped(obj):
-            if not DISABLE_VNODES:
-                obj.skip("Test disabled for vnodes")
-            f(obj)
-        wrapped.__name__ = f.__name__
-        wrapped.__doc__ = f.__doc__
-        return wrapped
+    def __call__(self, skippable):
+        if isinstance(skippable, type):
+            return self._wrap_setUp(skippable)
+        return self._wrap_function(skippable)
 
-class require(object):
-    def __init__(self, msg):
-        self.msg = msg
 
-    def __call__(self, f):
-        def wrapped(obj):
-            obj.skip("require " + self.msg)
-            f(obj)
-        wrapped.__name__ = f.__name__
-        wrapped.__doc__ = f.__doc__
-        return wrapped
+def no_vnodes():
+    """Skips the decorated test or test class if using vnodes."""
+    return unittest.skipIf(not DISABLE_VNODES, 'Test disabled for vnodes')
+
+
+def require(msg):
+    """Skips the decorated class or method with a message about which Jira
+    ticket it requires."""
+    # equivalent to decorating with @unittest.skip
+    return unittest.skip('require ' + msg)

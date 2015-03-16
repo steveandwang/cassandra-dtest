@@ -7,6 +7,7 @@ from cassandra.query import BatchStatement, SimpleStatement
 from cassandra.protocol import ConfigurationException
 from tools import since, new_node
 
+@since('3.0')
 class TestGlobalIndexes(Tester):
 
     def prepare(self):
@@ -33,7 +34,6 @@ class TestGlobalIndexes(Tester):
 
         return session
 
-    @since('3.0')
     def populate_index_after_insert_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -50,7 +50,6 @@ class TestGlobalIndexes(Tester):
             except InvalidRequest as e:
                 assert re.search("Cannot query index until it is built.", str(e))
 
-    @since('3.0')
     def drop_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -67,7 +66,6 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000):
             assert_invalid(session, "SELECT * FROM t WHERE v = %d" % i)
 
-    @since('3.0')
     def test_6924_dropping_cf(self):
         session = self.prepare()
 
@@ -87,7 +85,6 @@ class TestGlobalIndexes(Tester):
             count = rows[0][0]
             self.assertEqual(count, 10)
 
-    @since('3.0')
     def add_node_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -113,7 +110,6 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000, 1100):
             assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i])
 
-    @since('3.0')
     def drop_node_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -138,7 +134,6 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000, 1100):
             assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i])
 
-    @since('3.0')
     def add_dc_after_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -166,7 +161,6 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000, 1100):
             assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i])
 
-    @since('3.0')
     def test_8272(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v text)")
@@ -184,7 +178,6 @@ class TestGlobalIndexes(Tester):
 
     ##BASIC TESTS. COPY 2i tests from cql_tests here
 
-    @since('3.0')
     def global_index_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
@@ -196,14 +189,12 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000):
             assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i])
 
-    @since('3.0')
     def test_create_index(self):
         session = self.carl_prepare()
 
         result = session.execute("SELECT * FROM system.schema_globalindexes WHERE keyspace_name='ks' AND columnfamily_name='users'")
         assert len(result) == 1, "Expecting 1 global index, got" + str(result)
 
-    @since('3.0')
     def test_index_query(self):
         session = self.carl_prepare()
 
@@ -222,8 +213,6 @@ class TestGlobalIndexes(Tester):
         result = session.execute("SELECT state, password, session_token FROM users WHERE state='MA';")
         assert len(result) == 0, "Expecting 0 users, got" + str(result)
 
-
-    @since('3.0')
     def test_index_prepared_statement(self):
         session = self.carl_prepare()
 
@@ -245,7 +234,6 @@ class TestGlobalIndexes(Tester):
         result = session.execute(selectPrepared.bind(['MA']))
         assert len(result) == 0, "Expecting 0 users, got" + str(result)
 
-    @since('3.0')
     def test_drop_index(self):
         session = self.carl_prepare()
 
@@ -257,14 +245,12 @@ class TestGlobalIndexes(Tester):
         result = session.execute("SELECT * FROM system.schema_globalindexes WHERE keyspace_name='ks' AND columnfamily_name='users'")
         assert len(result) == 0, "Expecting 0 global indexes, got" + str(result)
 
-    @since('3.0')
     def test_drop_indexed_column(self):
         session = self.carl_prepare()
 
         assert_invalid(session, "ALTER TABLE ks.users DROP state")
         assert_invalid(session, "ALTER TABLE ks.users ALTER state TYPE blob")
 
-    @since('3.0')
     def test_double_indexing_column(self):
         session = self.carl_prepare()
 
@@ -274,7 +260,6 @@ class TestGlobalIndexes(Tester):
         session.execute("CREATE INDEX ON ks.users (gender)")
         assert_invalid(session, "CREATE GLOBAL INDEX ON ks.users (gender) INCLUDE (birth_year)")
 
-    @since('3.0')
     def test_drop_indexed_table(self):
         session = self.carl_prepare()
 

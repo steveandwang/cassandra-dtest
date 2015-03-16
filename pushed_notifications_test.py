@@ -40,7 +40,7 @@ class NotificationWaiter(object):
         """
 
         debug("Source %s sent %s for %s" % (self.address, notification["change_type"], notification["address"][0],))
-        
+
         self.notifications.append(notification)
         self.event.set()
 
@@ -61,6 +61,10 @@ class NotificationWaiter(object):
                             % (self.notification_type, self.address))
         else:
             return self.notifications
+
+    def clear_notifications(self):
+        self.notifications = []
+        self.event.clear()
 
 
 class TestPushedNotifications(Tester):
@@ -94,15 +98,14 @@ class TestPushedNotifications(Tester):
     def restart_node_test(self):
         """
         Restarting a node should generate exactly one DOWN and one UP notification
-        """        
+        """
 
         self.cluster.populate(2).start()
-
         node1, node2 = self.cluster.nodelist()
 
         waiter = NotificationWaiter(self, node1, "STATUS_CHANGE", num_notifications=2)
 
-        for i in range(3):
+        for i in range(5):
             debug("Restarting second node...")
             node2.stop()
             node2.start()
@@ -113,6 +116,7 @@ class TestPushedNotifications(Tester):
             self.assertEquals("DOWN", notifications[0]["change_type"])
             self.assertEquals(self.get_ip_from_node(node2), notifications[1]["address"][0])
             self.assertEquals("UP", notifications[1]["change_type"])
+            waiter.clear_notifications()
 
 
 
