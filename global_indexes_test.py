@@ -58,6 +58,17 @@ class TestGlobalIndexes(Tester):
         for i in xrange(1000):
             assert_one(session, "SELECT * FROM t WHERE v = %d AND v3 = 3.0 ALLOW FILTERING" % i, [i, i, 'a', 3.0])
 
+    def clustering_column_test(self):
+        session = self.prepare()
+        session.execute("CREATE TABLE t (id int, v int, PRIMARY KEY (id, v))")
+        session.execute("CREATE GLOBAL INDEX ON t (v) INCLUDE (*)")
+
+        for i in xrange(1000):
+            session.execute("INSERT INTO t (id, v) VALUES (%d, %d)" % (i, i))
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE v = %d" % i, [i, i])
+
     def populate_index_after_insert_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int)")
