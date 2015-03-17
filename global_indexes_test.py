@@ -34,6 +34,17 @@ class TestGlobalIndexes(Tester):
 
         return session
 
+    def indexed_collections_test(self):
+        session = self.prepare()
+        session.execute("CREATE TABLE t (id int PRIMARY KEY, v int, numbers set<int>)")
+        session.execute("CREATE GLOBAL INDEX ON t (numbers) INCLUDE (*)")
+
+        for i in xrange(1000):
+            session.execute("INSERT INTO t (id, v, numbers) VALUES (%d, %d, {%d})" % (i, i, i))
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE numbers CONTAINS %d" % (i), [i, i, i])
+
     def indexed_ttl_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int, v2 int, v3 int)")
