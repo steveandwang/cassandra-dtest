@@ -34,6 +34,22 @@ class TestGlobalIndexes(Tester):
 
         return session
 
+    def indexed_ttl_test(self):
+        session = self.prepare()
+        session.execute("CREATE TABLE t (id int PRIMARY KEY, v int, v2 int, v3 int)")
+        session.execute("CREATE GLOBAL INDEX ON t (v2) INCLUDE (*)")
+
+        for i in xrange(1000):
+            session.execute("INSERT INTO t (id, v, v2, v3) VALUES (%d, %d, %d, %d) USING TTL 30" % (i, i, i, i))
+
+        for i in xrange(1000):
+            assert_one(session, "SELECT * FROM t WHERE v2 = %d" % i, [i, i, i, i])
+
+        time.sleep(30)
+
+        for i in xrange(1000):
+            assert_none(session, "SELECT * FROM t WHERE v2 = %d" % i)
+
     def allow_filtering_test(self):
         session = self.prepare()
         session.execute("CREATE TABLE t (id int PRIMARY KEY, v int, v2 text, v3 decimal)")
