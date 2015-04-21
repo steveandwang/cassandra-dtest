@@ -209,10 +209,14 @@ def require(msg):
     return unittest.skip('require ' + str(msg))
 
 class InterruptBootstrap(Thread):
-    def __init__(self, node):
+    def __init__(self, node, message=None):
         Thread.__init__(self)
         self.node = node
-
+        self.message = message
     def run(self):
-        self.node.watch_log_for("Prepare completed")
-        self.node.stop(gently=False)
+        if self.message != None:
+            self.node.watch_log_for(self.message)
+            self.node.stop(gently=False)
+        else:
+            self.node.watch_log_for("Prepare completed")
+            self.node.stop(gently=False)
