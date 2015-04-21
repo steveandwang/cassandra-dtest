@@ -182,7 +182,9 @@ class TestSystemPeers(Tester):
         [node1, node2, node3] = cluster.nodelist()
         cursor = self.patient_cql_connection(node1)
         cursor2 = self.patient_cql_connection(node2)
-        cursor3 = self.patient_cql_connection(node1)
+        cursor3 = self.patient_cql_connection(node3)
+
+        time.sleep(2)
 
         cursor.execute("truncate system.peers")
         node1.stop()
