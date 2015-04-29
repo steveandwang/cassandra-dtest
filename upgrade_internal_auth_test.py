@@ -1,7 +1,7 @@
 from cassandra import Unauthorized
 from dtest import Tester, debug
-from pyassertions import *
-from pytools import since
+from assertions import *
+from tools import since
 import time
 
 from ccmlib import repository
