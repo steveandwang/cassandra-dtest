@@ -6,7 +6,7 @@ import tempfile
 import re
 from dtest import Tester, debug
 from tools import new_node, query_c1c2, since, InterruptBootstrap
-from assertions import assert_almost_equal
+from assertions import assert_almost_equal, assert_one
 from ccmlib.node import NodeError
 from cassandra import ConsistencyLevel
 from cassandra.concurrent import execute_concurrent_with_args
@@ -279,3 +279,52 @@ class TestBootstrap(Tester):
         regex = re.compile("Operation.+error inserting key.+Exception")
         failure = regex.search(output)
         self.assertIsNone(failure, "Error during stress while bootstrapping")
+
+    @since('2.1.1')
+    def simultaneous_bootstrap_test(self):
+        """
+        Attempt to bootstrap two nodes at once, to assert the second bootstrapped node fails, and does not interfere.
+
+        Start a one node cluster and run a stress write workload.
+        Start up a second node, and wait for the first node to detect it has joined the cluster.
+        While the second node is boostrapping, start a third node. This should fail.
+
+        @jira_ticket CASSANDRA-7069
+        """
+
+        bootstrap_error = "Other bootstrapping/leaving/moving nodes detected,"
+        " cannot bootstrap while cassandra.consistent.rangemovement is true"
+
+        self.ignore_log_patterns.append(bootstrap_error)
+        cluster = self.cluster
+        cluster.populate(1)
+        cluster.start(wait_for_binary_proto=True)
+
+        node1, = cluster.nodelist()
+
+        node1.stress(['write', 'n=500K', '-schema', 'replication(factor=1)',
+                          '-rate', 'threads=10'])
+
+        node2 = new_node(cluster)
+        node2.start(wait_other_notice=True)
+
+        node3 = new_node(cluster, remote_debug_port='2003')
+        try:
+            process = node3.start(verbose=True)
+            stdout, stderr = process.communicate()
+            if stderr.find(bootstrap_error):
+                debug(stderr)
+                assert True
+            if node3.is_running():
+                assert False, "Node should not have started."
+        except NodeError:
+            assert True
+
+        node2.watch_log_for("Starting listening for CQL clients")
+
+        session = self.patient_cql_connection(node2)
+        assert_one(session, "SELECT count(*) from keyspace1.standard1", [500000], cl=ConsistencyLevel.ALL)
+        assert_one(session, "SELECT count(*) from keyspace1.standard1", [500000], cl=ConsistencyLevel.ALL)
+        assert_one(session, "SELECT count(*) from keyspace1.standard1", [500000], cl=ConsistencyLevel.ALL)
+        assert_one(session, "SELECT count(*) from keyspace1.standard1", [500000], cl=ConsistencyLevel.ALL)
+        assert_one(session, "SELECT count(*) from keyspace1.standard1", [500000], cl=ConsistencyLevel.ALL)
