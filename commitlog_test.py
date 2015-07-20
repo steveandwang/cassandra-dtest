@@ -1,14 +1,16 @@
+import glob
 import os
 import stat
-import glob
-import time
 import subprocess
-import ccmlib
-from tools import since
+import time
+
 from cassandra import WriteTimeout
 from cassandra.cluster import NoHostAvailable, OperationTimedOut
+
+import ccmlib
+from assertions import assert_almost_equal, assert_none, assert_one
 from dtest import Tester, debug
-from assertions import assert_one, assert_none, assert_almost_equal
+from tools import require, since
 
 
 class TestCommitLog(Tester):
@@ -35,18 +37,18 @@ class TestCommitLog(Tester):
         conf.update(configuration)
         self.cluster.set_configuration_options(values=conf, **kwargs)
         self.cluster.start()
-        self.cursor1 = self.patient_cql_connection(self.node1)
+        self.session1 = self.patient_cql_connection(self.node1)
         if create_test_keyspace:
-            self.cursor1.execute("DROP KEYSPACE IF EXISTS ks;")
-            self.create_ks(self.cursor1, 'ks', 1)
-            self.cursor1.execute("DROP TABLE IF EXISTS test;")
+            self.session1.execute("DROP KEYSPACE IF EXISTS ks;")
+            self.create_ks(self.session1, 'ks', 1)
+            self.session1.execute("DROP TABLE IF EXISTS test;")
             query = """
               CREATE TABLE test (
                 key int primary key,
                 col1 int
               )
             """
-            self.cursor1.execute(query)
+            self.session1.execute(query)
 
     def _change_commitlog_perms(self, mod):
         path = self._get_commitlog_path()
@@ -113,11 +115,11 @@ class TestCommitLog(Tester):
         """ Provoke the commitlog failure """
 
         # Test things are ok at this point
-        self.cursor1.execute("""
+        self.session1.execute("""
             INSERT INTO test (key, col1) VALUES (1, 1);
         """)
         assert_one(
-            self.cursor1,
+            self.session1,
             "SELECT * FROM test where key=1;",
             [1, 1]
         )
@@ -132,6 +134,7 @@ class TestCommitLog(Tester):
                 self.node1.stress(['write', 'n=500000', '-rate', 'threads=25'], stdout=devnull, stderr=subprocess.STDOUT)
 
     @since('2.1')
+    @require(9717, broken_in='3.0')
     def default_segment_size_test(self):
         """ Test default commitlog_segment_size_in_mb (32MB) """
 
@@ -139,6 +142,7 @@ class TestCommitLog(Tester):
         self._commitlog_test(32, 60, 2, files_error=0.5)
 
     @since('2.1')
+    @require(9717, broken_in='3.0')
     def small_segment_size_test(self):
         """ Test a small commitlog_segment_size_in_mb (5MB) """
         segment_size_in_mb = 5
@@ -178,13 +182,13 @@ class TestCommitLog(Tester):
 
         # Cannot write anymore after the failure
         with self.assertRaises(NoHostAvailable):
-            self.cursor1.execute("""
+            self.session1.execute("""
               INSERT INTO test (key, col1) VALUES (2, 2);
             """)
 
         # Should not be able to read neither
         with self.assertRaises(NoHostAvailable):
-            self.cursor1.execute("""
+            self.session1.execute("""
               "SELECT * FROM test;"
             """)
 
@@ -194,7 +198,7 @@ class TestCommitLog(Tester):
             'commit_failure_policy': 'stop_commit'
         })
 
-        self.cursor1.execute("""
+        self.session1.execute("""
             INSERT INTO test (key, col1) VALUES (2, 2);
         """)
 
@@ -206,13 +210,13 @@ class TestCommitLog(Tester):
 
         # Cannot write anymore after the failure
         with self.assertRaises((OperationTimedOut, WriteTimeout)):
-            self.cursor1.execute("""
+            self.session1.execute("""
               INSERT INTO test (key, col1) VALUES (2, 2);
             """)
 
         # Should be able to read
         assert_one(
-            self.cursor1,
+            self.session1,
             "SELECT * FROM test where key=2;",
             [2, 2]
         )
@@ -242,27 +246,27 @@ class TestCommitLog(Tester):
         self.assertTrue(self.node1.is_running(), "Node1 should still be running")
 
         with self.assertRaises((OperationTimedOut, WriteTimeout)):
-            self.cursor1.execute("""
+            self.session1.execute("""
               INSERT INTO test (key, col1) VALUES (2, 2);
             """)
         # Should not exists
-        assert_none(self.cursor1, "SELECT * FROM test where key=2;")
+        assert_none(self.session1, "SELECT * FROM test where key=2;")
 
         # bring back the node commitlogs
         self._change_commitlog_perms(stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
 
-        self.cursor1.execute("""
+        self.session1.execute("""
           INSERT INTO test (key, col1) VALUES (3, 3);
         """)
         assert_one(
-            self.cursor1,
+            self.session1,
             "SELECT * FROM test where key=3;",
             [3, 3]
         )
 
         time.sleep(2)
         assert_one(
-            self.cursor1,
+            self.session1,
             "SELECT * FROM test where key=2;",
             [2, 2]
         )

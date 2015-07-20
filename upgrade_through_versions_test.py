@@ -20,7 +20,7 @@ from cassandra.query import SimpleStatement
 # other tests will focus on single upgrades from UPGRADE_PATH[n] to UPGRADE_PATH[n+1]
 
 TRUNK_VER = (3, 0)
-DEFAULT_PATH = [(1, 2), (2, 0), (2, 1), TRUNK_VER]
+DEFAULT_PATH = [(1, 2), (2, 0), (2, 1), (2, 2), TRUNK_VER]
 
 CUSTOM_PATH = os.environ.get('UPGRADE_PATH', None)
 if CUSTOM_PATH:
@@ -118,6 +118,28 @@ def make_branch_str(_tuple):
 
     return 'cassandra-{}.{}'.format(_tuple[0], _tuple[1])
 
+def sanitize_version(version):
+    """
+        Takes versions of the form cassandra-1.2, 2.0.10, or trunk.
+        Returns just the version string 'X.Y.Z'
+    """
+    if version.find('-') >= 0:
+        return LooseVersion(version.split('-')[1])
+    elif version == 'trunk':
+        return LooseVersion(make_ver_str(TRUNK_VER))
+    else:
+        return LooseVersion(version)
+
+def switch_jdks(version):
+    version = sanitize_version(version)
+    try:
+        if version < '2.1':
+            os.environ['JAVA_HOME'] = os.environ['JAVA7_HOME']
+        else:
+            os.environ['JAVA_HOME'] = os.environ['JAVA8_HOME']
+    except KeyError as e:
+        raise RuntimeError("You need to set JAVA7_HOME and JAVA8_HOME to run these tests!")
+
 
 class TestUpgradeThroughVersions(Tester):
     """
@@ -160,6 +182,7 @@ class TestUpgradeThroughVersions(Tester):
             os.environ['CASSANDRA_VERSION'] = 'git:' + self.test_versions[0]
 
         debug("Versions to test (%s): %s" % (type(self), str([v for v in self.test_versions])))
+        switch_jdks(os.environ['CASSANDRA_VERSION'][-3:])
         super(TestUpgradeThroughVersions, self).setUp()
 
     def upgrade_test(self):
@@ -178,7 +201,7 @@ class TestUpgradeThroughVersions(Tester):
             # Start with 3 node cluster
             debug('Creating cluster (%s)' % self.test_versions[0])
             cluster.populate(3)
-            [node.start(use_jna=True) for node in cluster.nodelist()]
+            [node.start(use_jna=True, wait_for_binary_proto=True) for node in cluster.nodelist()]
         else:
             debug("Skipping cluster creation (should already be built)")
 
@@ -241,6 +264,8 @@ class TestUpgradeThroughVersions(Tester):
         and upgrade all nodes.
         """
         debug('Upgrading {nodes} to {tag}'.format(nodes=[n.name for n in nodes] if nodes is not None else 'all nodes',tag=tag))
+        switch_jdks(tag)
+        debug(os.environ['JAVA_HOME'])
         if not mixed_version:
             nodes = self.cluster.nodelist()
 
@@ -274,7 +299,7 @@ class TestUpgradeThroughVersions(Tester):
             debug('Starting %s on new version (%s)' % (node.name, tag))
             # Setup log4j / logback again (necessary moving from 2.0 -> 2.1):
             node.set_log_level("INFO")
-            node.start(wait_other_notice=True)
+            node.start(wait_other_notice=True, wait_for_binary_proto=True)
             node.nodetool('upgradesstables -a')
 
     def _log_current_ver(self, current_tag):
@@ -288,17 +313,17 @@ class TestUpgradeThroughVersions(Tester):
                 vers[:curr_index] + ['***' + current_tag + '***'] + vers[curr_index + 1:]))
 
     def _create_schema(self):
-        cursor = self.patient_cql_connection(self.node2, protocol_version=1)
+        session = self.patient_cql_connection(self.node2, protocol_version=1)
 
-        cursor.execute("""CREATE KEYSPACE upgrade WITH replication = {'class':'SimpleStrategy',
+        session.execute("""CREATE KEYSPACE upgrade WITH replication = {'class':'SimpleStrategy',
             'replication_factor':2};
             """)
 
-        cursor.execute('use upgrade')
-        cursor.execute('CREATE TABLE cf ( k int PRIMARY KEY , v text )')
-        cursor.execute('CREATE INDEX vals ON cf (v)')
+        session.execute('use upgrade')
+        session.execute('CREATE TABLE cf ( k int PRIMARY KEY , v text )')
+        session.execute('CREATE INDEX vals ON cf (v)')
 
-        cursor.execute("""
+        session.execute("""
             CREATE TABLE countertable (
                 k1 text,
                 k2 int,
@@ -307,28 +332,28 @@ class TestUpgradeThroughVersions(Tester):
                 );""")
 
     def _write_values(self, num=100):
-        cursor = self.patient_cql_connection(self.node2, protocol_version=1)
-        cursor.execute("use upgrade")
+        session = self.patient_cql_connection(self.node2, protocol_version=1)
+        session.execute("use upgrade")
         for i in xrange(num):
             x = len(self.row_values) + 1
-            cursor.execute("UPDATE cf SET v='%d' WHERE k=%d" % (x, x))
+            session.execute("UPDATE cf SET v='%d' WHERE k=%d" % (x, x))
             self.row_values.add(x)
 
     def _check_values(self, consistency_level=ConsistencyLevel.ALL):
         for node in self.cluster.nodelist():
-            cursor = self.patient_cql_connection(node, protocol_version=1)
-            cursor.execute("use upgrade")
+            session = self.patient_cql_connection(node, protocol_version=1)
+            session.execute("use upgrade")
             for x in self.row_values:
                 query = SimpleStatement("SELECT k,v FROM cf WHERE k=%d" % x, consistency_level=consistency_level)
-                result = cursor.execute(query)
+                result = session.execute(query)
                 k,v = result[0]
                 self.assertEqual(x, k)
                 self.assertEqual(str(x), v)
 
     def _increment_counters(self, opcount=25000):
         debug("performing {opcount} counter increments".format(opcount=opcount))
-        cursor = self.patient_cql_connection(self.node2, protocol_version=1)
-        cursor.execute("use upgrade;")
+        session = self.patient_cql_connection(self.node2, protocol_version=1)
+        session.execute("use upgrade;")
 
         update_counter_query = ("UPDATE countertable SET c = c + 1 WHERE k1='{key1}' and k2={key2}")
 
@@ -343,7 +368,7 @@ class TestUpgradeThroughVersions(Tester):
             key2 = random.randint(1, 10)
             try:
                 query = SimpleStatement(update_counter_query.format(key1=key1, key2=key2), consistency_level=ConsistencyLevel.ALL)
-                cursor.execute(query)
+                session.execute(query)
             except WriteTimeout:
                 fail_count += 1
             else:
@@ -355,8 +380,8 @@ class TestUpgradeThroughVersions(Tester):
 
     def _check_counters(self):
         debug("Checking counter values...")
-        cursor = self.patient_cql_connection(self.node2, protocol_version=1)
-        cursor.execute("use upgrade;")
+        session = self.patient_cql_connection(self.node2, protocol_version=1)
+        session.execute("use upgrade;")
 
         for key1 in self.expected_counts.keys():
             for key2 in self.expected_counts[key1].keys():
@@ -364,7 +389,7 @@ class TestUpgradeThroughVersions(Tester):
 
                 query = SimpleStatement("SELECT c from countertable where k1='{key1}' and k2={key2};".format(key1=key1, key2=key2),
                     consistency_level=ConsistencyLevel.ONE)
-                results = cursor.execute(query)
+                results = session.execute(query)
 
                 if results is not None:
                     actual_value = results[0][0]
@@ -376,13 +401,13 @@ class TestUpgradeThroughVersions(Tester):
 
     def _check_select_count(self, consistency_level=ConsistencyLevel.ALL):
         debug("Checking SELECT COUNT(*)")
-        cursor = self.patient_cql_connection(self.node2, protocol_version=1)
-        cursor.execute("use upgrade;")
+        session = self.patient_cql_connection(self.node2, protocol_version=1)
+        session.execute("use upgrade;")
 
         expected_num_rows = len(self.row_values)
 
         countquery = SimpleStatement("SELECT COUNT(*) FROM cf;", consistency_level=consistency_level)
-        result = cursor.execute(countquery)
+        result = session.execute(countquery)
 
         if result is not None:
             actual_num_rows = result[0][0]
@@ -439,7 +464,7 @@ class PointToPointUpgradeBase(TestUpgradeThroughVersions):
         # Check we can bootstrap a new node on the upgraded cluster:
         debug("Adding a node to the cluster")
         nnode = new_node(self.cluster, remote_debug_port=str(2000 + len(self.cluster.nodes)))
-        nnode.start(use_jna=True, wait_other_notice=True)
+        nnode.start(use_jna=True, wait_other_notice=True, wait_for_binary_proto=True)
         self._write_values()
         self._increment_counters()
         self._check_values()
@@ -450,7 +475,7 @@ class PointToPointUpgradeBase(TestUpgradeThroughVersions):
         debug("Adding a node to the cluster")
         nnode = new_node(self.cluster, remote_debug_port=str(2000 + len(self.cluster.nodes)), data_center='dc2')
 
-        nnode.start(use_jna=True, wait_other_notice=True)
+        nnode.start(use_jna=True, wait_other_notice=True, wait_for_binary_proto=True)
         self._write_values()
         self._increment_counters()
         self._check_values()
@@ -464,30 +489,30 @@ class PointToPointUpgradeBase(TestUpgradeThroughVersions):
         # try and add a new node
         # multi dc, 2 nodes in each dc
         self.cluster.populate([2, 2])
-        [node.start(use_jna=True) for node in self.cluster.nodelist()]
+        [node.start(use_jna=True, wait_for_binary_proto=True) for node in self.cluster.nodelist()]
         self._multidc_schema_create()
         self.upgrade_scenario(populate=False, create_schema=False, after_upgrade_call=(self._bootstrap_new_node_multidc,))
 
     def _multidc_schema_create(self):
-        cursor = self.patient_cql_connection(self.cluster.nodelist()[0], protocol_version=1)
+        session = self.patient_cql_connection(self.cluster.nodelist()[0], protocol_version=1)
 
         if self.cluster.version() >= '1.2':
             # DDL for C* 1.2+
-            cursor.execute("""CREATE KEYSPACE upgrade WITH replication = {'class':'NetworkTopologyStrategy',
+            session.execute("""CREATE KEYSPACE upgrade WITH replication = {'class':'NetworkTopologyStrategy',
                 'dc1':1, 'dc2':1};
                 """)
         else:
             # DDL for C* 1.1
-            cursor.execute("""CREATE KEYSPACE upgrade WITH strategy_class = 'NetworkTopologyStrategy'
+            session.execute("""CREATE KEYSPACE upgrade WITH strategy_class = 'NetworkTopologyStrategy'
             AND strategy_options:'dc1':1
             AND strategy_options:'dc2':1;
             """)
 
-        cursor.execute('use upgrade')
-        cursor.execute('CREATE TABLE cf ( k int PRIMARY KEY , v text )')
-        cursor.execute('CREATE INDEX vals ON cf (v)')
+        session.execute('use upgrade')
+        session.execute('CREATE TABLE cf ( k int PRIMARY KEY , v text )')
+        session.execute('CREATE INDEX vals ON cf (v)')
 
-        cursor.execute("""
+        session.execute("""
             CREATE TABLE countertable (
                 k1 text,
                 k2 int,

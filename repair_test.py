@@ -5,7 +5,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from dtest import Tester, debug
-from tools import insert_c1c2, no_vnodes, query_c1c2, since, require
+from tools import insert_c1c2, no_vnodes, query_c1c2, require, since
 
 
 class TestRepair(Tester):
@@ -22,17 +22,17 @@ class TestRepair(Tester):
                 stopped_nodes.append(node)
                 node.stop(wait_other_notice=True)
 
-        cursor = self.patient_cql_connection(node_to_check, 'ks')
-        result = cursor.execute("SELECT * FROM cf LIMIT %d" % (rows * 2))
-        assert len(result) == rows, len(result)
+        session = self.patient_cql_connection(node_to_check, 'ks')
+        result = session.execute("SELECT * FROM cf LIMIT %d" % (rows * 2))
+        self.assertEqual(len(result), rows, len(result))
 
         for k in found:
-            query_c1c2(cursor, k, ConsistencyLevel.ONE)
+            query_c1c2(session, k, ConsistencyLevel.ONE)
 
         for k in missings:
             query = SimpleStatement("SELECT c1, c2 FROM cf WHERE key='k%d'" % k, consistency_level=ConsistencyLevel.ONE)
-            res = cursor.execute(query)
-            assert len(filter(lambda x: len(x) != 0, res)) == 0, res
+            res = session.execute(query)
+            self.assertEqual(len(filter(lambda x: len(x) != 0, res)), 0, res)
 
         if restart:
             for node in stopped_nodes:
@@ -89,20 +89,20 @@ class TestRepair(Tester):
         cluster.populate(3).start()
         node1, node2, node3 = cluster.nodelist()
 
-        cursor = self.patient_cql_connection(node1)
-        self.create_ks(cursor, 'ks', 3)
-        self.create_cf(cursor, 'cf', read_repair=0.0, columns={'c1': 'text', 'c2': 'text'})
+        session = self.patient_cql_connection(node1)
+        self.create_ks(session, 'ks', 3)
+        self.create_cf(session, 'cf', read_repair=0.0, columns={'c1': 'text', 'c2': 'text'})
 
         # Insert 1000 keys, kill node 3, insert 1 key, restart node 3, insert 1000 more keys
         debug("Inserting data...")
         for i in xrange(0, 1000):
-            insert_c1c2(cursor, i, ConsistencyLevel.ALL)
+            insert_c1c2(session, i, ConsistencyLevel.ALL)
         node3.flush()
         node3.stop()
-        insert_c1c2(cursor, 1000, ConsistencyLevel.TWO)
+        insert_c1c2(session, 1000, ConsistencyLevel.TWO)
         node3.start(wait_other_notice=True)
         for i in xrange(1001, 2001):
-            insert_c1c2(cursor, i, ConsistencyLevel.ALL)
+            insert_c1c2(session, i, ConsistencyLevel.ALL)
 
         cluster.flush()
 
@@ -126,17 +126,17 @@ class TestRepair(Tester):
         debug("Repair time: {end}".format(end=time.time() - start))
 
         # Validate that only one range was transfered
-        l = node1.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync")
+        out_of_sync_logs = node1.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync")
         if cluster.version() > "1":
-            assert len(l) == 2, "Lines matching: " + str([elt[0] for elt in l])
+            self.assertEqual(len(out_of_sync_logs), 2, "Lines matching: " + str([elt[0] for elt in out_of_sync_logs]))
         else:
             # In pre-1.0, we should have only one line
-            assert len(l) == 1, "Lines matching: " + str([elt[0] for elt in l])
+            self.assertEqual(len(out_of_sync_logs), 1, "Lines matching: " + str([elt[0] for elt in out_of_sync_logs]))
         valid = [(node1.address(), node3.address()), (node3.address(), node1.address()),
                  (node2.address(), node3.address()), (node3.address(), node2.address())]
-        for line, m in l:
-            assert int(m.group(3)) == 1, "Expecting 1 range out of sync, got " + int(m.group(1))
-            assert (m.group(1), m.group(2)) in valid, str((m.group(1), m.group(2)))
+        for line, m in out_of_sync_logs:
+            self.assertEqual(int(m.group(3)), 1, "Expecting 1 range out of sync, got " + m.group(3))
+            self.assertIn((m.group(1), m.group(2)), valid, str((m.group(1), m.group(2))))
             valid.remove((m.group(1), m.group(2)))
             valid.remove((m.group(2), m.group(1)))
 
@@ -155,9 +155,9 @@ class TestRepair(Tester):
         cluster.start()
         node1, node2 = cluster.nodelist()
 
-        cursor = self.patient_cql_connection(node1)
+        session = self.patient_cql_connection(node1)
         # create keyspace with RF=2 to be able to be repaired
-        self.create_ks(cursor, 'ks', 2)
+        self.create_ks(session, 'ks', 2)
         # we create two tables, one has low gc grace seconds so that the data
         # can be dropped during test (but we don't actually drop them).
         # the other has default gc.
@@ -172,7 +172,7 @@ class TestRepair(Tester):
             WITH gc_grace_seconds=1
             AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'false'};
         """
-        cursor.execute(query)
+        session.execute(query)
         time.sleep(.5)
         query = """
             CREATE TABLE cf2 (
@@ -183,7 +183,7 @@ class TestRepair(Tester):
             )
             WITH compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': 'false'};
         """
-        cursor.execute(query)
+        session.execute(query)
         time.sleep(.5)
 
         # take down node2, so that only node1 has gc-able data
@@ -193,17 +193,17 @@ class TestRepair(Tester):
             for i in xrange(0, 10):
                 for j in xrange(0, 1000):
                     query = SimpleStatement("INSERT INTO %s (key, c1, c2) VALUES ('k%d', 'v%d', 'value')" % (cf, i, j), consistency_level=ConsistencyLevel.ONE)
-                    cursor.execute(query)
+                    session.execute(query)
             node1.flush()
             # delete those data, half with row tombstone, and the rest with cell range tombstones
             for i in xrange(0, 5):
                 query = SimpleStatement("DELETE FROM %s WHERE key='k%d'" % (cf, i), consistency_level=ConsistencyLevel.ONE)
-                cursor.execute(query)
+                session.execute(query)
             node1.flush()
             for i in xrange(5, 10):
                 for j in xrange(0, 1000):
                     query = SimpleStatement("DELETE FROM %s WHERE key='k%d' AND c1='v%d'" % (cf, i, j), consistency_level=ConsistencyLevel.ONE)
-                    cursor.execute(query)
+                    session.execute(query)
             node1.flush()
 
         # sleep until gc grace seconds pass so that cf1 can be dropped
@@ -217,16 +217,103 @@ class TestRepair(Tester):
         for cf in ['cf1', 'cf2']:
             for i in xrange(0, 10):
                 query = SimpleStatement("SELECT c1, c2 FROM %s WHERE key='k%d'" % (cf, i), consistency_level=ConsistencyLevel.ALL)
-                res = cursor.execute(query)
-                assert len(filter(lambda x: len(x) != 0, res)) == 0, res
+                res = session.execute(query)
+                self.assertEqual(len(filter(lambda x: len(x) != 0, res)), 0, res)
 
         # check log for no repair happened for gcable data
-        l = node2.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync for cf1")
-        assert len(l) == 0, "GC-able data does not need to be repaired with empty data: " + str([elt[0] for elt in l])
+        out_of_sync_logs = node2.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync for cf1")
+        self.assertEqual(len(out_of_sync_logs), 0, "GC-able data does not need to be repaired with empty data: " + str([elt[0] for elt in out_of_sync_logs]))
         # check log for actual repair for non gcable data
-        l = node2.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync for cf2")
-        assert len(l) > 0, "Non GC-able data should be repaired"
+        out_of_sync_logs = node2.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync for cf2")
+        self.assertGreater(len(out_of_sync_logs), 0, "Non GC-able data should be repaired")
 
+    def local_dc_repair_test(self):
+        cluster = self._setup_multi_dc()
+        node1 = cluster.nodes["node1"]
+        node2 = cluster.nodes["node2"]
+
+        debug("starting repair...")
+        opts = ["-local"]
+        opts += self._repair_options(ks="ks")
+        node1.repair(opts)
+
+        # Verify that only nodes in dc1 are involved in repair
+        out_of_sync_logs = node1.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync")
+        self.assertEqual(len(out_of_sync_logs), 1, "Lines matching: %d" % len(out_of_sync_logs))
+        line, m = out_of_sync_logs[0]
+        self.assertEqual(int(m.group(3)), 1, "Expecting 1 range out of sync, got " + m.group(3))
+        valid = [node1.address(), node2.address()]
+        self.assertIn(m.group(1), valid, "Unrelated node found in local repair: " + m.group(1))
+        valid.remove(m.group(1))
+        self.assertIn(m.group(2), valid, "Unrelated node found in local repair: " + m.group(2))
+        # Check node2 now has the key
+        self.check_rows_on_node(node2, 2001, found=[1000], restart=False)
+
+    def dc_repair_test(self):
+        cluster = self._setup_multi_dc()
+        node1 = cluster.nodes["node1"]
+        node2 = cluster.nodes["node2"]
+        node3 = cluster.nodes["node3"]
+
+        debug("starting repair...")
+        opts = ["-dc", "dc1", "-dc", "dc2"]
+        opts += self._repair_options(ks="ks")
+        node1.repair(opts)
+
+        # Verify that only nodes in dc1 and dc2 are involved in repair
+        out_of_sync_logs = node1.grep_log("/([0-9.]+) and /([0-9.]+) have ([0-9]+) range\(s\) out of sync")
+        self.assertEqual(len(out_of_sync_logs),  2, "Lines matching: " + str([elt[0] for elt in out_of_sync_logs]))
+        valid = [(node1.address(), node2.address()), (node2.address(), node1.address()),
+                 (node2.address(), node3.address()), (node3.address(), node2.address())]
+        for line, m in out_of_sync_logs:
+            self.assertEqual(int(m.group(3)), 1, "Expecting 1 range out of sync, got " + m.group(3))
+            self.assertIn((m.group(1), m.group(2)), valid, str((m.group(1), m.group(2))))
+            valid.remove((m.group(1), m.group(2)))
+            valid.remove((m.group(2), m.group(1)))
+        # Check node2 now has the key
+        self.check_rows_on_node(node2, 2001, found=[1000], restart=False)
+
+    def _setup_multi_dc(self):
+        """
+        Sets up 3 DCs (2 nodes in 'dc1', and one each in 'dc2' and 'dc3').
+        After set up, node2 in dc1 lacks some data and needs to be repaired.
+        """
+        cluster = self.cluster
+
+        # Disable hinted handoff and set batch commit log so this doesn't
+        # interfer with the test (this must be after the populate)
+        cluster.set_configuration_options(values={'hinted_handoff_enabled': False}, batch_commitlog=True)
+        debug("Starting cluster..")
+        # populate 2 nodes in dc1, and one node each in dc2 and dc3
+        cluster.populate([2, 1, 1]).start()
+        version = cluster.version()
+
+        [node1, node2, node3, node4] = cluster.nodelist()
+        session = self.patient_cql_connection(node1)
+        session.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1, 'dc3':1};")
+        session.execute("USE ks")
+        self.create_cf(session, 'cf', read_repair=0.0, columns={'c1': 'text', 'c2': 'text'})
+
+        # Insert 1000 keys, kill node 3, insert 1 key, restart node 3, insert 1000 more keys
+        debug("Inserting data...")
+        for i in xrange(0, 1000):
+            insert_c1c2(session, i, ConsistencyLevel.ALL)
+        node2.flush()
+        node2.stop()
+        insert_c1c2(session, 1000, ConsistencyLevel.THREE)
+        node2.start(wait_for_binary_proto=True, wait_other_notice=True)
+        node1.watch_log_for_alive(node2)
+        for i in xrange(1001, 2001):
+            insert_c1c2(session, i, ConsistencyLevel.ALL)
+
+        cluster.flush()
+
+        # Verify that only node2 has only 2000 keys and others have 2001 keys
+        debug("Checking data...")
+        self.check_rows_on_node(node2, 2000, missings=[1000])
+        for node in [node1, node3, node4]:
+            self.check_rows_on_node(node, 2001, found=[1000])
+        return cluster
 
 RepairTableContents = namedtuple('RepairTableContents',
                                  ['parent_repair_history', 'repair_history'])

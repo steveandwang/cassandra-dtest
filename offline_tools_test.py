@@ -1,8 +1,9 @@
-from dtest import Tester, debug
 import os
 import re
 import subprocess
+
 from ccmlib import common
+from dtest import Tester, debug, require
 from tools import since
 
 
@@ -16,7 +17,7 @@ class TestOfflineTools(Tester):
     def sstablelevelreset_test(self):
         """
         Insert data and call sstablelevelreset on a series of
-        tables. Confirm level is reset to 0 using sstable2json to read tables.
+        tables. Confirm level is reset to 0 using its output.
         Test a variety of possible errors and ensure response is resonable.
         @since 2.1.5
         @jira_ticket CASSANDRA-7614
@@ -47,8 +48,8 @@ class TestOfflineTools(Tester):
 
         #test by writing small amount of data and flushing (all sstables should be level 0)
         cluster.start()
-        cursor = self.patient_cql_connection(node1)
-        cursor.execute("ALTER TABLE keyspace1.standard1 with compaction={'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb':3};")
+        session = self.patient_cql_connection(node1)
+        session.execute("ALTER TABLE keyspace1.standard1 with compaction={'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb':3};")
         if cluster.version() < "2.1":
             node1.stress(['-o', 'insert', '--num-keys=10000', '--replication-factor=3'])
         else:
@@ -128,8 +129,8 @@ class TestOfflineTools(Tester):
 
         #test by flushing (sstable should be level 0)
         cluster.start()
-        cursor = self.patient_cql_connection(node1)
-        cursor.execute("ALTER TABLE keyspace1.standard1 with compaction={'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb':3};")
+        session = self.patient_cql_connection(node1)
+        session.execute("ALTER TABLE keyspace1.standard1 with compaction={'class': 'LeveledCompactionStrategy', 'sstable_size_in_mb':3};")
 
         node1.stress(['write', 'n=1000', '-schema', 'replication(factor=3)'])
 
@@ -160,6 +161,7 @@ class TestOfflineTools(Tester):
             self.assertEqual(final_levels[x], 0, msg=initial)
 
     @since('2.2')
+    @require(9774, broken_in='3.0')
     def sstableverify_test(self):
         """
         Generate sstables and test offline verification works correctly

@@ -1,10 +1,14 @@
-import time, re
+import re
+import time
 
-from cassandra import Unauthorized, AuthenticationFailed
+from cassandra import AuthenticationFailed, Unauthorized
 from cassandra.cluster import NoHostAvailable
-from dtest import debug, Tester
-from tools import since
+
 from assertions import assert_invalid
+from dtest import Tester, debug
+from flaky import flaky
+from tools import since
+
 
 class TestAuth(Tester):
 
@@ -17,23 +21,20 @@ class TestAuth(Tester):
         ]
         Tester.__init__(self, *args, **kwargs)
 
+    @flaky
     def system_auth_ks_is_alterable_test(self):
         self.prepare(nodes=3)
         debug("nodes started")
-        schema_query = """SELECT strategy_options
-                          FROM system.schema_keyspaces
-                          WHERE keyspace_name = 'system_auth'"""
 
-        cursor = self.get_cursor(0, user='cassandra', password='cassandra')
-        rows = cursor.execute(schema_query)
-        row = rows[0]
-        self.assertEqual('{"replication_factor":"1"}', row[0])
+        session = self.get_session(user='cassandra', password='cassandra')
+        self.assertEquals(1, session.cluster.metadata.keyspaces['system_auth'].replication_strategy.replication_factor)
 
-
-        cursor.execute("""
+        session.execute("""
             ALTER KEYSPACE system_auth
                 WITH replication = {'class':'SimpleStrategy', 'replication_factor':3};
         """)
+
+        self.assertEquals(3, session.cluster.metadata.keyspaces['system_auth'].replication_strategy.replication_factor)
 
         # make sure schema change is persistent
         debug("Stopping cluster..")
@@ -41,23 +42,23 @@ class TestAuth(Tester):
         debug("Restarting cluster..")
         self.cluster.start(wait_other_notice=True)
 
+        # check each node directly
         for i in range(3):
             debug('Checking node: {i}'.format(i=i))
-            cursor = self.get_cursor(i, user='cassandra', password='cassandra')
-            rows = cursor.execute(schema_query)
-            row = rows[0]
-            self.assertEqual('{"replication_factor":"3"}', row[0])
+            node = self.cluster.nodelist()[i]
+            session = self.patient_exclusive_cql_connection(node, user='cassandra', password='cassandra')
+            self.assertEquals(3, session.cluster.metadata.keyspaces['system_auth'].replication_strategy.replication_factor)
 
     def login_test(self):
         # also tests default user creation (cassandra/cassandra)
         self.prepare()
-        self.get_cursor(user='cassandra', password='cassandra')
+        self.get_session(user='cassandra', password='cassandra')
         try:
-            self.get_cursor(user='cassandra', password='badpassword')
+            self.get_session(user='cassandra', password='badpassword')
         except NoHostAvailable as e:
             assert isinstance(e.errors.values()[0], AuthenticationFailed)
         try:
-            self.get_cursor(user='doesntexist', password='doesntmatter')
+            self.get_session(user='doesntexist', password='doesntmatter')
         except NoHostAvailable as e:
             assert isinstance(e.errors.values()[0], AuthenticationFailed)
 
@@ -66,36 +67,36 @@ class TestAuth(Tester):
     def only_superuser_can_create_users_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER jackob WITH PASSWORD '12345' NOSUPERUSER")
 
-        jackob = self.get_cursor(user='jackob', password='12345')
+        jackob = self.get_session(user='jackob', password='12345')
         self.assertUnauthorized('Only superusers are allowed to perform CREATE (\[ROLE\|USER\]|USER) queries', jackob, "CREATE USER james WITH PASSWORD '54321' NOSUPERUSER")
 
     @since('1.2', max_version='2.1.x')
     def password_authenticator_create_user_requires_password_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
-        assert_invalid(cursor, "CREATE USER jackob NOSUPERUSER", 'PasswordAuthenticator requires PASSWORD option')
+        session = self.get_session(user='cassandra', password='cassandra')
+        assert_invalid(session, "CREATE USER jackob NOSUPERUSER", 'PasswordAuthenticator requires PASSWORD option')
 
     def cant_create_existing_user_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
-        cursor.execute("CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER")
-        assert_invalid(cursor, "CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER", 'james@example.com already exists')
+        session = self.get_session(user='cassandra', password='cassandra')
+        session.execute("CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER")
+        assert_invalid(session, "CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER", 'james@example.com already exists')
 
     def list_users_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
-        cursor.execute("CREATE USER alex WITH PASSWORD '12345' NOSUPERUSER")
-        cursor.execute("CREATE USER bob WITH PASSWORD '12345' SUPERUSER")
-        cursor.execute("CREATE USER cathy WITH PASSWORD '12345' NOSUPERUSER")
-        cursor.execute("CREATE USER dave WITH PASSWORD '12345' SUPERUSER")
+        session = self.get_session(user='cassandra', password='cassandra')
+        session.execute("CREATE USER alex WITH PASSWORD '12345' NOSUPERUSER")
+        session.execute("CREATE USER bob WITH PASSWORD '12345' SUPERUSER")
+        session.execute("CREATE USER cathy WITH PASSWORD '12345' NOSUPERUSER")
+        session.execute("CREATE USER dave WITH PASSWORD '12345' SUPERUSER")
 
-        rows = cursor.execute("LIST USERS")
+        rows = session.execute("LIST USERS")
         self.assertEqual(5, len(rows))
         # {username: isSuperuser} dict.
         users = dict([(r[0], r[1]) for r in rows])
@@ -109,22 +110,22 @@ class TestAuth(Tester):
     def user_cant_drop_themselves_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
+        session = self.get_session(user='cassandra', password='cassandra')
         # handle different error messages between versions pre and post 2.2.0
-        assert_invalid(cursor, "DROP USER cassandra", "(Users aren't allowed to DROP themselves|Cannot DROP primary role for current login)")
+        assert_invalid(session, "DROP USER cassandra", "(Users aren't allowed to DROP themselves|Cannot DROP primary role for current login)")
 
     # from 2.2 role deletion is granted by DROP_ROLE permissions, not superuser status
     @since('1.2', max_version='2.1.x')
     def only_superusers_can_drop_users_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345' NOSUPERUSER")
         cassandra.execute("CREATE USER dave WITH PASSWORD '12345' NOSUPERUSER")
         rows = cassandra.execute("LIST USERS")
         self.assertEqual(3, len(rows))
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized('Only superusers are allowed to perform DROP (\[ROLE\|USER\]|USER) queries',
                                 cathy, 'DROP USER dave')
 
@@ -138,36 +139,36 @@ class TestAuth(Tester):
     def dropping_nonexistent_user_throws_exception_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
-        assert_invalid(cursor, 'DROP USER nonexistent', "nonexistent doesn't exist")
+        session = self.get_session(user='cassandra', password='cassandra')
+        assert_invalid(session, 'DROP USER nonexistent', "nonexistent doesn't exist")
 
     def regular_users_can_alter_their_passwords_only_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE USER bob WITH PASSWORD '12345'")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         cathy.execute("ALTER USER cathy WITH PASSWORD '54321'")
-        cathy = self.get_cursor(user='cathy', password='54321')
+        cathy = self.get_session(user='cathy', password='54321')
         self.assertUnauthorized("You aren't allowed to alter this user|User cathy does not have sufficient privileges to perform the requested operation",
                                 cathy, "ALTER USER bob WITH PASSWORD 'cantchangeit'")
 
     def users_cant_alter_their_superuser_status_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
+        session = self.get_session(user='cassandra', password='cassandra')
         self.assertUnauthorized("You aren't allowed to alter your own superuser status",
-                                cursor, "ALTER USER cassandra NOSUPERUSER")
+                                session, "ALTER USER cassandra NOSUPERUSER")
 
     def only_superuser_alters_superuser_status_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("Only superusers are allowed to alter superuser status",
                                 cathy, "ALTER USER cassandra NOSUPERUSER")
 
@@ -176,36 +177,36 @@ class TestAuth(Tester):
     def altering_nonexistent_user_throws_exception_test(self):
         self.prepare()
 
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
-        assert_invalid(cursor, "ALTER USER nonexistent WITH PASSWORD 'doesn''tmatter'", "nonexistent doesn't exist")
+        session = self.get_session(user='cassandra', password='cassandra')
+        assert_invalid(session, "ALTER USER nonexistent WITH PASSWORD 'doesn''tmatter'", "nonexistent doesn't exist")
 
     @since('2.0')
     def conditional_create_drop_user_test(self):
         self.prepare()
-        cursor = self.get_cursor(user='cassandra', password='cassandra')
+        session = self.get_session(user='cassandra', password='cassandra')
 
-        users = cursor.execute("LIST USERS")
-        self.assertEqual(1, len(users)) # cassandra
+        users = session.execute("LIST USERS")
+        self.assertEqual(1, len(users))  # cassandra
 
-        cursor.execute("CREATE USER IF NOT EXISTS aleksey WITH PASSWORD 'sup'")
-        cursor.execute("CREATE USER IF NOT EXISTS aleksey WITH PASSWORD 'ignored'")
+        session.execute("CREATE USER IF NOT EXISTS aleksey WITH PASSWORD 'sup'")
+        session.execute("CREATE USER IF NOT EXISTS aleksey WITH PASSWORD 'ignored'")
 
-        users = cursor.execute("LIST USERS")
-        self.assertEqual(2, len(users)) # cassandra + aleksey
+        users = session.execute("LIST USERS")
+        self.assertEqual(2, len(users))  # cassandra + aleksey
 
-        cursor.execute("DROP USER IF EXISTS aleksey")
-        cursor.execute("DROP USER IF EXISTS aleksey")
+        session.execute("DROP USER IF EXISTS aleksey")
+        session.execute("DROP USER IF EXISTS aleksey")
 
-        users = cursor.execute("LIST USERS")
-        self.assertEqual(1, len(users)) # cassandra
+        users = session.execute("LIST USERS")
+        self.assertEqual(1, len(users))  # cassandra
 
     def create_ks_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no CREATE permission on <all keyspaces> or any of its parents",
                                 cathy,
                                 "CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
@@ -216,11 +217,11 @@ class TestAuth(Tester):
     def create_cf_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no CREATE permission on <keyspace ks> or any of its parents",
                                 cathy, "CREATE TABLE ks.cf (id int primary key)")
 
@@ -230,11 +231,11 @@ class TestAuth(Tester):
     def alter_ks_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no ALTER permission on <keyspace ks> or any of its parents",
                                 cathy,
                                 "ALTER KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':2}")
@@ -245,12 +246,12 @@ class TestAuth(Tester):
     def alter_cf_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
         cassandra.execute("CREATE TABLE ks.cf (id int primary key)")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no ALTER permission on <table ks.cf> or any of its parents",
                                 cathy, "ALTER TABLE ks.cf ADD val int")
 
@@ -276,11 +277,11 @@ class TestAuth(Tester):
     def drop_ks_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no DROP permission on <keyspace ks> or any of its parents",
                                 cathy, "DROP KEYSPACE ks")
 
@@ -290,12 +291,12 @@ class TestAuth(Tester):
     def drop_cf_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
         cassandra.execute("CREATE TABLE ks.cf (id int primary key)")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no DROP permission on <table ks.cf> or any of its parents",
                                 cathy, "DROP TABLE ks.cf")
 
@@ -305,12 +306,12 @@ class TestAuth(Tester):
     def modify_and_select_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
         cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no SELECT permission on <table ks.cf> or any of its parents",
                                 cathy, "SELECT * FROM ks.cf")
 
@@ -341,16 +342,16 @@ class TestAuth(Tester):
         self.assertEquals(1, len(rows))
 
         rows = cathy.execute("TRUNCATE ks.cf")
-        assert rows == None
+        assert rows is None
 
     def grant_revoke_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE USER bob WITH PASSWORD '12345'")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         # missing both SELECT and AUTHORIZE
         self.assertUnauthorized("User cathy has no AUTHORIZE permission on <all keyspaces> or any of its parents",
                                 cathy, "GRANT SELECT ON ALL KEYSPACES TO bob")
@@ -369,7 +370,7 @@ class TestAuth(Tester):
     def grant_revoke_validation_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
 
@@ -384,13 +385,13 @@ class TestAuth(Tester):
     def grant_revoke_cleanup_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
         cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
         cassandra.execute("GRANT ALL ON ks.cf TO cathy")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         cathy.execute("INSERT INTO ks.cf (id, val) VALUES (0, 0)")
         rows = cathy.execute("SELECT * FROM ks.cf")
         self.assertEquals(1, len(rows))
@@ -425,14 +426,14 @@ class TestAuth(Tester):
     def permissions_caching_test(self):
         self.prepare(permissions_validity=2000)
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
         cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         # another user to make sure the cache is at user level
-        cathy2 = self.get_cursor(user='cathy', password='12345')
+        cathy2 = self.get_session(user='cathy', password='12345')
         cathys = [cathy, cathy2]
 
         self.assertUnauthorized("User cathy has no SELECT permission on <table ks.cf> or any of its parents",
@@ -476,7 +477,7 @@ class TestAuth(Tester):
     def list_permissions_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE USER bob WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
@@ -495,7 +496,7 @@ class TestAuth(Tester):
                            ('cathy', '<table ks.cf2>', 'SELECT'),
                            ('bob', '<keyspace ks>', 'ALTER'),
                            ('bob', '<table ks.cf>', 'DROP'),
-                           ('bob', '<table ks.cf2>', 'MODIFY')];
+                           ('bob', '<table ks.cf2>', 'MODIFY')]
 
         # CASSANDRA-7216 automatically grants permissions on a role to its creator
         if self.cluster.cassandra_version() >= '2.2.0':
@@ -528,7 +529,7 @@ class TestAuth(Tester):
                                       ('cathy', '<table ks.cf>', 'MODIFY')],
                                      cassandra, "LIST ALL ON ks.cf OF cathy")
 
-        bob = self.get_cursor(user='bob', password='12345')
+        bob = self.get_session(user='bob', password='12345')
         self.assertPermissionsListed([('bob', '<keyspace ks>', 'ALTER'),
                                       ('bob', '<table ks.cf>', 'DROP'),
                                       ('bob', '<table ks.cf2>', 'MODIFY')],
@@ -544,11 +545,11 @@ class TestAuth(Tester):
     def type_auth_test(self):
         self.prepare()
 
-        cassandra = self.get_cursor(user='cassandra', password='cassandra')
+        cassandra = self.get_session(user='cassandra', password='cassandra')
         cassandra.execute("CREATE USER cathy WITH PASSWORD '12345'")
         cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'SimpleStrategy', 'replication_factor':1}")
 
-        cathy = self.get_cursor(user='cathy', password='12345')
+        cathy = self.get_session(user='cathy', password='12345')
         self.assertUnauthorized("User cathy has no CREATE permission on <keyspace ks> or any of its parents",
                                 cathy, "CREATE TYPE ks.address (street text, city text)")
         self.assertUnauthorized("User cathy has no ALTER permission on <keyspace ks> or any of its parents",
@@ -564,9 +565,9 @@ class TestAuth(Tester):
         cathy.execute("DROP TYPE ks.address")
 
     def prepare(self, nodes=1, permissions_validity=0):
-        config = {'authenticator' : 'org.apache.cassandra.auth.PasswordAuthenticator',
-                  'authorizer' : 'org.apache.cassandra.auth.CassandraAuthorizer',
-                  'permissions_validity_in_ms' : permissions_validity}
+        config = {'authenticator': 'org.apache.cassandra.auth.PasswordAuthenticator',
+                  'authorizer': 'org.apache.cassandra.auth.CassandraAuthorizer',
+                  'permissions_validity_in_ms': permissions_validity}
         self.cluster.set_configuration_options(values=config)
         self.cluster.populate(nodes).start(no_wait=True)
         # default user setup is delayed by 10 seconds to reduce log spam
@@ -577,21 +578,21 @@ class TestAuth(Tester):
             # only one test uses more than 1 node, though, so some sleep is fine.
             time.sleep(15)
 
-    def get_cursor(self, node_idx=0, user=None, password=None):
+    def get_session(self, node_idx=0, user=None, password=None):
         node = self.cluster.nodelist()[node_idx]
         conn = self.patient_cql_connection(node, user=user, password=password)
         return conn
 
-    def assertPermissionsListed(self, expected, cursor, query):
+    def assertPermissionsListed(self, expected, session, query):
         # from cassandra.query import named_tuple_factory
-        # cursor.row_factory = named_tuple_factory
-        rows = cursor.execute(query)
+        # session.row_factory = named_tuple_factory
+        rows = session.execute(query)
         perms = [(str(r.username), str(r.resource), str(r.permission)) for r in rows]
         self.assertEqual(sorted(expected), sorted(perms))
 
-    def assertUnauthorized(self, message, cursor, query):
+    def assertUnauthorized(self, message, session, query):
         with self.assertRaises(Unauthorized) as cm:
-            cursor.execute(query)
+            session.execute(query)
         assert re.search(message, cm.exception.message), "Expected '%s', but got '%s'" % (message, cm.exception.message)
 
 

@@ -1,10 +1,14 @@
+from flaky import flaky
+
 from dtest import Tester, debug
-from jmxutils import make_mbean, JolokiaAgent, remove_perf_disable_shared_mem
+from jmxutils import JolokiaAgent, make_mbean, remove_perf_disable_shared_mem
 from tools import since
+
 
 class TestJMX(Tester):
 
     @since('2.1')
+    @flaky  # flaps on 2.2
     def cfhistograms_test(self):
         """
         Test cfhistograms on large and small datasets
@@ -30,10 +34,10 @@ class TestJMX(Tester):
         except Exception, e:
             self.fail("Cfhistograms command failed: " + str(e))
 
-        cursor = self.patient_cql_connection(node1)
+        session = self.patient_cql_connection(node1)
 
-        cursor.execute("CREATE KEYSPACE test WITH REPLICATION = {'class':'SimpleStrategy', 'replication_factor':3}")
-        cursor.execute("CREATE TABLE test.tab(key int primary key, val int);")
+        session.execute("CREATE KEYSPACE test WITH REPLICATION = {'class':'SimpleStrategy', 'replication_factor':3}")
+        session.execute("CREATE TABLE test.tab(key int primary key, val int);")
 
         try:
             finalhistogram = node1.nodetool("cfhistograms test tab", capture_output=True)

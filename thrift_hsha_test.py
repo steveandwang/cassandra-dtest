@@ -23,7 +23,11 @@ class ThriftHSHATest(Tester):
 
     @unittest.skipIf(sys.platform == "win32", 'Could not be executed on Windows')
     def test_closing_connections(self):
-        """Test CASSANDRA-6546 - do connections get closed when disabling / renabling thrift service?"""
+        """
+        @jira_ticket CASSANDRA-6546
+
+        Test CASSANDRA-6546 - do connections get closed when disabling / renabling thrift service?
+        """
         cluster = self.cluster
         cluster.set_configuration_options(values={
             'start_rpc': 'true',
@@ -35,9 +39,9 @@ class ThriftHSHATest(Tester):
         cluster.start(wait_for_binary_proto=True)
         (node1,) = cluster.nodelist()
 
-        cursor = self.patient_cql_connection(node1)
-        self.create_ks(cursor, 'test', 1)
-        cursor.execute("CREATE TABLE \"CF\" (key text PRIMARY KEY, val text) WITH COMPACT STORAGE;")
+        session = self.patient_cql_connection(node1)
+        self.create_ks(session, 'test', 1)
+        session.execute("CREATE TABLE \"CF\" (key text PRIMARY KEY, val text) WITH COMPACT STORAGE;")
         def make_connection():
             pool = pycassa.ConnectionPool('test', timeout=None)
             cf = pycassa.ColumnFamily(pool, 'CF')
@@ -61,7 +65,10 @@ class ThriftHSHATest(Tester):
     @unittest.skipIf(not os.path.exists(ATTACK_JAR), "No attack jar found")
     @unittest.skipIf(not os.path.exists(JNA_PATH), "No JNA jar found")
     def test_6285(self):
-        """Test CASSANDRA-6285 with Viktor Kuzmin's  attack jar.
+        """
+        @jira_ticket CASSANDRA-6285
+
+        Test CASSANDRA-6285 with Viktor Kuzmin's  attack jar.
 
         This jar file is not a part of this repository, you can
         compile it yourself from sources found on CASSANDRA-6285. This
@@ -84,10 +91,10 @@ class ThriftHSHATest(Tester):
         [n.start(use_jna=True) for n in nodes]
         debug("Cluster started.")
 
-        cursor = self.patient_cql_connection(node1)
-        self.create_ks(cursor, 'tmp', 2)
+        session = self.patient_cql_connection(node1)
+        self.create_ks(session, 'tmp', 2)
 
-        cursor.execute("""CREATE TABLE "CF" (
+        session.execute("""CREATE TABLE "CF" (
   key blob,
   column1 timeuuid,
   value blob,

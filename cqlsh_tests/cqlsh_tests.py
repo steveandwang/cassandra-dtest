@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
-from dtest import Tester, debug
-from cassandra import InvalidRequest
-from ccmlib import common
 import binascii
-from cassandra.concurrent import execute_concurrent_with_args
 import csv
 import datetime
-from decimal import Decimal
 import os
 import subprocess
 import sys
+from decimal import Decimal
+from distutils.version import LooseVersion
 from tempfile import NamedTemporaryFile
 from uuid import UUID, uuid4
-from distutils.version import LooseVersion
-from tools import create_c1c2_table, insert_c1c2, since, rows_to_list
-from assertions import assert_all, assert_none
 
+from cassandra import InvalidRequest
+from cassandra.concurrent import execute_concurrent_with_args
+
+from assertions import assert_all, assert_none
+from ccmlib import common
 from cqlsh_tools import monkeypatch_driver, unmonkeypatch_driver
+from dtest import Tester, debug
+from tools import create_c1c2_table, insert_c1c2, rows_to_list, since
 
 
 class TestCqlsh(Tester):
@@ -32,6 +33,11 @@ class TestCqlsh(Tester):
     def tearDownClass(cls):
         unmonkeypatch_driver(cls._cached_driver_methods)
 
+    def tearDown(self):
+        if hasattr(self, 'tempfile'):
+            os.unlink(self.tempfile.name)
+            super(TestCqlsh, self).tearDown()
+
     def test_simple_insert(self):
 
         self.cluster.populate(1)
@@ -39,7 +45,7 @@ class TestCqlsh(Tester):
 
         node1, = self.cluster.nodelist()
 
-        node1.run_cqlsh(cmds = """
+        node1.run_cqlsh(cmds="""
             CREATE KEYSPACE simple WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             use simple;
             create TABLE simple (id int PRIMARY KEY , value text ) ;
@@ -49,11 +55,11 @@ class TestCqlsh(Tester):
             insert into simple (id, value) VALUES (4, 'four');
             insert into simple (id, value) VALUES (5, 'five')""")
 
-        cursor = self.patient_cql_connection(node1)
-        rows = cursor.execute("select id, value from simple.simple");
+        session = self.patient_cql_connection(node1)
+        rows = session.execute("select id, value from simple.simple")
 
-        self.assertEqual({1:'one', 2:'two', 3:'three', 4:'four', 5:'five'},
-                         {k : v for k,v in rows})
+        self.assertEqual({1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five'},
+                         {k: v for k, v in rows})
 
     def test_eat_glass(self):
 
@@ -62,7 +68,7 @@ class TestCqlsh(Tester):
 
         node1, = self.cluster.nodelist()
 
-        node1.run_cqlsh(cmds = u"""create KEYSPACE testks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+        node1.run_cqlsh(cmds=u"""create KEYSPACE testks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 use testks;
 
 CREATE TABLE varcharmaptable (
@@ -175,119 +181,119 @@ UPDATE varcharmaptable SET varcharvarintmap = varcharvarintmap + {'Vitrum edere 
 UPDATE varcharmaptable SET varcharvarintmap['Vitrum edere possum, mihi non nocet.'] = 1010010101020400204143243 WHERE varcharkey= '᚛᚛ᚉᚑᚅᚔᚉᚉᚔᚋ ᚔᚈᚔ ᚍᚂᚐᚅᚑ ᚅᚔᚋᚌᚓᚅᚐ᚜'
         """.encode("utf-8"))
 
-        cursor = self.patient_cql_connection(node1)
+        session = self.patient_cql_connection(node1)
+
         def verify_varcharmap(map_name, expected, encode_value=False):
-            rows = cursor.execute((u"SELECT %s FROM testks.varcharmaptable WHERE varcharkey= '᚛᚛ᚉᚑᚅᚔᚉᚉᚔᚋ ᚔᚈᚔ ᚍᚂᚐᚅᚑ ᚅᚔᚋᚌᚓᚅᚐ᚜';" % map_name).encode("utf-8"))
+            rows = session.execute((u"SELECT %s FROM testks.varcharmaptable WHERE varcharkey= '᚛᚛ᚉᚑᚅᚔᚉᚉᚔᚋ ᚔᚈᚔ ᚍᚂᚐᚅᚑ ᚅᚔᚋᚌᚓᚅᚐ᚜';" % map_name).encode("utf-8"))
             if encode_value:
-                got = {k.encode("utf-8"):v.encode("utf-8") for k,v in rows[0][0].iteritems()}
+                got = {k.encode("utf-8"): v.encode("utf-8") for k, v in rows[0][0].iteritems()}
             else:
-                got = {k.encode("utf-8"):v for k,v in rows[0][0].iteritems()}
+                got = {k.encode("utf-8"): v for k, v in rows[0][0].iteritems()}
             self.assertEqual(got, expected)
 
         verify_varcharmap('varcharasciimap', {
-            'Vitrum edere possum, mihi non nocet.' : 'Hello',
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : 'My',
-            'Можам да јадам стакло, а не ме штета.' : 'Name',
-            'I can eat glass and it does not hurt me' : 'Is'
+            'Vitrum edere possum, mihi non nocet.': 'Hello',
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': 'My',
+            'Можам да јадам стакло, а не ме штета.': 'Name',
+            'I can eat glass and it does not hurt me': 'Is'
         })
 
         verify_varcharmap('varcharbigintmap', {
-            'Vitrum edere possum, mihi non nocet.' : 5100003,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : -45,
-            'Можам да јадам стакло, а не ме штета.' : 12300,
-            'I can eat glass and it does not hurt me' : 0
+            'Vitrum edere possum, mihi non nocet.': 5100003,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': -45,
+            'Можам да јадам стакло, а не ме штета.': 12300,
+            'I can eat glass and it does not hurt me': 0
         })
 
         verify_varcharmap('varcharblobmap', {
-            'Vitrum edere possum, mihi non nocet.' : binascii.a2b_hex("FEED103A"),
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : binascii.a2b_hex("DEADBEEF"),
-            'Можам да јадам стакло, а не ме штета.' : binascii.a2b_hex("BEEFBEEF"),
-            'I can eat glass and it does not hurt me' : binascii.a2b_hex("FEEB")
+            'Vitrum edere possum, mihi non nocet.': binascii.a2b_hex("FEED103A"),
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': binascii.a2b_hex("DEADBEEF"),
+            'Можам да јадам стакло, а не ме штета.': binascii.a2b_hex("BEEFBEEF"),
+            'I can eat glass and it does not hurt me': binascii.a2b_hex("FEEB")
         })
 
-
         verify_varcharmap('varcharbooleanmap', {
-            'Vitrum edere possum, mihi non nocet.' : True,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : False,
-            'Можам да јадам стакло, а не ме штета.' : False,
-            'I can eat glass and it does not hurt me' : False
+            'Vitrum edere possum, mihi non nocet.': True,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': False,
+            'Можам да јадам стакло, а не ме штета.': False,
+            'I can eat glass and it does not hurt me': False
         })
 
         verify_varcharmap('varchardecimalmap', {
-            'Vitrum edere possum, mihi non nocet.' : Decimal('50'),
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : Decimal('-20.4'),
-            'Можам да јадам стакло, а не ме штета.' : Decimal('11234234.3'),
-            'I can eat glass and it does not hurt me' : Decimal('10.0')
+            'Vitrum edere possum, mihi non nocet.': Decimal('50'),
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': Decimal('-20.4'),
+            'Можам да јадам стакло, а не ме штета.': Decimal('11234234.3'),
+            'I can eat glass and it does not hurt me': Decimal('10.0')
         })
 
         verify_varcharmap('varchardoublemap', {
-            'Vitrum edere possum, mihi non nocet.' : 4234243,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : -432.311,
-            'Можам да јадам стакло, а не ме штета.' : 3.1415,
-            'I can eat glass and it does not hurt me' : 20000.0
+            'Vitrum edere possum, mihi non nocet.': 4234243,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': -432.311,
+            'Можам да јадам стакло, а не ме штета.': 3.1415,
+            'I can eat glass and it does not hurt me': 20000.0
         })
 
         verify_varcharmap('varcharfloatmap', {
-            'Vitrum edere possum, mihi non nocet.' : 10.0,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : -234.3000030517578,
-            'Можам да јадам стакло, а не ме штета.' : -234234,
-            'I can eat glass and it does not hurt me' : 1000.5
+            'Vitrum edere possum, mihi non nocet.': 10.0,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': -234.3000030517578,
+            'Можам да јадам стакло, а не ме штета.': -234234,
+            'I can eat glass and it does not hurt me': 1000.5
         })
 
         verify_varcharmap('varcharintmap', {
-            'Vitrum edere possum, mihi non nocet.' : 1,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : 2,
-            'Можам да јадам стакло, а не ме штета.' : -3,
-            'I can eat glass and it does not hurt me' : -500
+            'Vitrum edere possum, mihi non nocet.': 1,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': 2,
+            'Можам да јадам стакло, а не ме штета.': -3,
+            'I can eat glass and it does not hurt me': -500
         })
 
         verify_varcharmap('varcharinetmap', {
-            'Vitrum edere possum, mihi non nocet.' : '192.168.0.1',
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : '127.0.0.1',
-            'Можам да јадам стакло, а не ме штета.' : '8.8.8.8',
-            'I can eat glass and it does not hurt me' : '8.8.4.4'
+            'Vitrum edere possum, mihi non nocet.': '192.168.0.1',
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': '127.0.0.1',
+            'Можам да јадам стакло, а не ме штета.': '8.8.8.8',
+            'I can eat glass and it does not hurt me': '8.8.4.4'
         })
 
         verify_varcharmap('varchartextmap', {
-            'Vitrum edere possum, mihi non nocet.' : 'Once I went',
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : 'On a trip',
-            'Можам да јадам стакло, а не ме штета.' : 'Across',
-            'I can eat glass and it does not hurt me' : 'The '
+            'Vitrum edere possum, mihi non nocet.': 'Once I went',
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': 'On a trip',
+            'Можам да јадам стакло, а не ме штета.': 'Across',
+            'I can eat glass and it does not hurt me': 'The '
         })
 
         verify_varcharmap('varchartimestampmap', {
-            'Vitrum edere possum, mihi non nocet.' : datetime.datetime(2013, 6, 19, 3, 21, 1),
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : datetime.datetime(1985, 8, 3, 4, 21, 1),
-            'Можам да јадам стакло, а не ме штета.' : datetime.datetime(2000, 1, 1, 0, 20, 1),
-            'I can eat glass and it does not hurt me' : datetime.datetime(1942, 3, 11, 5, 21, 1)
+            'Vitrum edere possum, mihi non nocet.': datetime.datetime(2013, 6, 19, 3, 21, 1),
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': datetime.datetime(1985, 8, 3, 4, 21, 1),
+            'Можам да јадам стакло, а не ме штета.': datetime.datetime(2000, 1, 1, 0, 20, 1),
+            'I can eat glass and it does not hurt me': datetime.datetime(1942, 3, 11, 5, 21, 1)
         })
 
         verify_varcharmap('varcharuuidmap', {
-            'Vitrum edere possum, mihi non nocet.' : UUID('7787064c-ce54-4324-abdd-05775b89ead7'),
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : UUID('1df0b6ac-f3d3-456c-8b78-2bc70e585107'),
-            'Можам да јадам стакло, а не ме штета.' : UUID('e2ed2164-31dc-42cb-8ee9-47376e071210'),
-            'I can eat glass and it does not hurt me' : UUID('a487fe45-8af5-4454-ac66-2614286d7e89')
+            'Vitrum edere possum, mihi non nocet.': UUID('7787064c-ce54-4324-abdd-05775b89ead7'),
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': UUID('1df0b6ac-f3d3-456c-8b78-2bc70e585107'),
+            'Можам да јадам стакло, а не ме штета.': UUID('e2ed2164-31dc-42cb-8ee9-47376e071210'),
+            'I can eat glass and it does not hurt me': UUID('a487fe45-8af5-4454-ac66-2614286d7e89')
         })
 
         verify_varcharmap('varchartimeuuidmap', {
-            'Vitrum edere possum, mihi non nocet.' : UUID('4a36c100-d8ec-11e2-a28f-0800200c9a66'),
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : UUID('670c7f90-d8ec-11e2-a28f-0800200c9a66'),
-            'Можам да јадам стакло, а не ме штета.' : UUID('750c2d70-d8ec-11e2-a28f-0800200c9a66'),
-            'I can eat glass and it does not hurt me' : UUID('80d74810-d8ec-11e2-a28f-0800200c9a66')
+            'Vitrum edere possum, mihi non nocet.': UUID('4a36c100-d8ec-11e2-a28f-0800200c9a66'),
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': UUID('670c7f90-d8ec-11e2-a28f-0800200c9a66'),
+            'Можам да јадам стакло, а не ме штета.': UUID('750c2d70-d8ec-11e2-a28f-0800200c9a66'),
+            'I can eat glass and it does not hurt me': UUID('80d74810-d8ec-11e2-a28f-0800200c9a66')
         })
 
         verify_varcharmap('varcharvarcharmap', {
-            'Vitrum edere possum, mihi non nocet.' : '᚛᚛ᚉᚑᚅᚔᚉᚉᚔᚋ ᚔᚈᚔ ᚍᚂᚐᚅᚑ ᚅᚔᚋᚌᚓᚅᚐ᚜',
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑',
-            'Можам да јадам стакло, а не ме штета.' : 'Можам да јадам стакло, а не ме штета.',
-            'I can eat glass and it does not hurt me' : 'I can eat glass and it does not hurt me'
+            'Vitrum edere possum, mihi non nocet.': '᚛᚛ᚉᚑᚅᚔᚉᚉᚔᚋ ᚔᚈᚔ ᚍᚂᚐᚅᚑ ᚅᚔᚋᚌᚓᚅᚐ᚜',
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑',
+            'Можам да јадам стакло, а не ме штета.': 'Можам да јадам стакло, а не ме штета.',
+            'I can eat glass and it does not hurt me': 'I can eat glass and it does not hurt me'
         }, encode_value=True)
 
         verify_varcharmap('varcharvarintmap', {
-            'Vitrum edere possum, mihi non nocet.' : 1010010101020400204143243,
-            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑' : -40,
-            'Можам да јадам стакло, а не ме штета.' : 110230,
-            'I can eat glass and it does not hurt me' : 1400
+            'Vitrum edere possum, mihi non nocet.': 1010010101020400204143243,
+            ' ⠊⠀⠉⠁⠝⠀⠑⠁⠞⠀⠛⠇⠁⠎⠎⠀⠁⠝⠙⠀⠊⠞⠀⠙⠕⠑⠎⠝⠞⠀⠓⠥⠗⠞⠀⠍⠑': -40,
+            'Можам да јадам стакло, а не ме штета.': 110230,
+            'I can eat glass and it does not hurt me': 1400
         })
 
         output, err = self.run_cqlsh(node1, 'use testks; SELECT * FROM varcharmaptable')
@@ -305,7 +311,7 @@ UPDATE varcharmaptable SET varcharvarintmap['Vitrum edere possum, mihi non nocet
 
         node1, = self.cluster.nodelist()
 
-        node1.run_cqlsh(cmds = u"""create keyspace  CASSANDRA_7196 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} ;
+        node1.run_cqlsh(cmds=u"""create keyspace  CASSANDRA_7196 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} ;
 
 use CASSANDRA_7196;
 
@@ -433,7 +439,7 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
 
         out, err = self.run_cqlsh(node1, "SELECT name.lastname FROM ks.users WHERE id=62c36092-82a1-3a00-93d1-46196ee77204")
         self.assertNotIn('list index out of range', err)
-        ##If this assertion fails check CASSANDRA-7891
+        # If this assertion fails check CASSANDRA-7891
 
     def verify_output(self, query, node, expected):
             output, err = self.run_cqlsh(node, query, ['-u', 'cassandra', '-p', 'cassandra'])
@@ -506,6 +512,196 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
 (6 rows)
 """)
 
+    @since('2.1')
+    def test_describe(self):
+        """
+        @jira_ticket CASSANDRA-7814
+        """
+        self.cluster.populate(1)
+        self.cluster.start(wait_for_binary_proto=True)
+        node1, = self.cluster.nodelist()
+
+        self.execute(
+            cql="""
+                CREATE KEYSPACE test WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};
+                CREATE TABLE test.users ( userid text PRIMARY KEY, firstname text, lastname text, age int);
+                CREATE INDEX myindex ON test.users (age);
+                CREATE TABLE test.test (id int, col int, val text, PRIMARY KEY(id, col));
+                CREATE INDEX ON test.test (col);
+                CREATE INDEX ON test.test (val)
+                """)
+
+        # Describe keyspaces
+        output = self.execute(cql="DESCRIBE KEYSPACES")
+        self.assertIn("test", output)
+        self.assertIn("system", output)
+
+        # Describe keyspace
+        self.execute(cql="DESCRIBE KEYSPACE test", expected_output=self.get_keyspace_output())
+        self.execute(cql="DESCRIBE test", expected_output=self.get_keyspace_output())
+        self.execute(cql="DESCRIBE test2", expected_err="'test2' not found in keyspaces")
+        self.execute(cql="USE test; DESCRIBE KEYSPACE", expected_output=self.get_keyspace_output())
+
+        # Describe table
+        self.execute(cql="DESCRIBE TABLE test.test", expected_output=self.get_test_table_output())
+        self.execute(cql="DESCRIBE TABLE test.users", expected_output=self.get_users_table_output())
+        self.execute(cql="DESCRIBE test.test", expected_output=self.get_test_table_output())
+        self.execute(cql="DESCRIBE test.users", expected_output=self.get_users_table_output())
+        self.execute(cql="DESCRIBE test.users2", expected_err="'users2' not found in keyspace 'test'")
+        self.execute(cql="USE test; DESCRIBE TABLE test", expected_output=self.get_test_table_output())
+        self.execute(cql="USE test; DESCRIBE TABLE users", expected_output=self.get_users_table_output())
+        self.execute(cql="USE test; DESCRIBE test", expected_output=self.get_keyspace_output())
+        self.execute(cql="USE test; DESCRIBE users", expected_output=self.get_users_table_output())
+        self.execute(cql="USE test; DESCRIBE users2", expected_err="'users2' not found in keyspace 'test'")
+
+        # Describe index
+        self.execute(cql='DESCRIBE INDEX test.myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+        self.execute(cql='DESCRIBE INDEX test.test_col_idx', expected_output=self.get_index_output('test_col_idx', 'test', 'test', 'col'))
+        self.execute(cql='DESCRIBE INDEX test.test_val_idx', expected_output=self.get_index_output('test_val_idx', 'test', 'test', 'val'))
+        self.execute(cql='DESCRIBE test.myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+        self.execute(cql='DESCRIBE test.test_col_idx', expected_output=self.get_index_output('test_col_idx', 'test', 'test', 'col'))
+        self.execute(cql='DESCRIBE test.test_val_idx', expected_output=self.get_index_output('test_val_idx', 'test', 'test', 'val'))
+        self.execute(cql='DESCRIBE test.myindex2', expected_err="'myindex2' not found in keyspace 'test'")
+        self.execute(cql='USE test; DESCRIBE INDEX myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+        self.execute(cql='USE test; DESCRIBE INDEX test_col_idx', expected_output=self.get_index_output('test_col_idx', 'test', 'test', 'col'))
+        self.execute(cql='USE test; DESCRIBE INDEX test_val_idx', expected_output=self.get_index_output('test_val_idx', 'test', 'test', 'val'))
+        self.execute(cql='USE test; DESCRIBE myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+        self.execute(cql='USE test; DESCRIBE test_col_idx', expected_output=self.get_index_output('test_col_idx', 'test', 'test', 'col'))
+        self.execute(cql='USE test; DESCRIBE test_val_idx', expected_output=self.get_index_output('test_val_idx', 'test', 'test', 'val'))
+        self.execute(cql='USE test; DESCRIBE myindex2', expected_err="'myindex2' not found in keyspace 'test'")
+
+        # Drop table and recreate
+        self.execute(cql='DROP TABLE test.users')
+        self.execute(cql='DESCRIBE test.users', expected_err="'users' not found in keyspace 'test'")
+        self.execute(cql='DESCRIBE test.myindex', expected_err="'myindex' not found in keyspace 'test'")
+        self.execute(cql="""
+                CREATE TABLE test.users ( userid text PRIMARY KEY, firstname text, lastname text, age int);
+                CREATE INDEX myindex ON test.users (age)
+                """)
+        self.execute(cql="DESCRIBE test.users", expected_output=self.get_users_table_output())
+        self.execute(cql='DESCRIBE test.myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+
+        # Drop index and recreate
+        self.execute(cql='DROP INDEX test.myindex')
+        self.execute(cql='DESCRIBE test.myindex', expected_err="'myindex' not found in keyspace 'test'")
+        self.execute(cql='CREATE INDEX myindex ON test.users (age)')
+        self.execute(cql='DESCRIBE INDEX test.myindex', expected_output=self.get_index_output('myindex', 'test', 'users', 'age'))
+
+        # Alter table (rename of column with idx is currently not allowed)
+        self.execute(cql='ALTER TABLE test.test DROP val')
+        self.execute(cql="DESCRIBE test.test", expected_output=self.get_test_table_output(has_val=False, has_val_idx=False))
+        self.execute(cql='DESCRIBE test.test_val_idx', expected_err="'test_val_idx' not found in keyspace 'test'")
+        self.execute(cql='ALTER TABLE test.test ADD val text')
+        self.execute(cql="DESCRIBE test.test", expected_output=self.get_test_table_output(has_val=True, has_val_idx=False))
+        self.execute(cql='DESCRIBE test.test_val_idx', expected_err="'test_val_idx' not found in keyspace 'test'")
+
+    def test_describe_describes_non_default_compaction_parameters(self):
+        self.cluster.populate(1)
+        self.cluster.start(wait_for_binary_proto=True)
+        node, = self.cluster.nodelist()
+        session = self.patient_cql_connection(node)
+        self.create_ks(session, 'ks', 1)
+        session.execute("CREATE TABLE tab (key int PRIMARY KEY ) "
+                        "WITH compaction = {'class': 'SizeTieredCompactionStrategy',"
+                        "'min_threshold': 10, 'max_threshold': 100 }")
+        describe_cmd = 'DESCRIBE ks.tab' if self.cluster.version > '2.0' else 'DESCRIBE TABLE ks.tab'
+        stdout, _ = self.run_cqlsh(node, describe_cmd)
+        self.assertIn("'min_threshold': '10'", stdout)
+        self.assertIn("'max_threshold': '100'", stdout)
+
+    def get_keyspace_output(self):
+        return ("CREATE KEYSPACE test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;" +
+                self.get_test_table_output() +
+                self.get_users_table_output())
+
+    def get_test_table_output(self, has_val=True, has_val_idx=True):
+        if has_val:
+            ret = """
+                CREATE TABLE test.test (
+                    id int,
+                    col int,
+                    val text,
+                PRIMARY KEY (id, col)
+                """
+        else:
+            ret = """
+                CREATE TABLE test.test (
+                    id int,
+                    col int,
+                PRIMARY KEY (id, col)
+                """
+
+        ret += """
+        ) WITH CLUSTERING ORDER BY (col ASC)
+            AND bloom_filter_fp_chance = 0.01
+            AND caching = '{"keys":"ALL", "rows_per_partition":"NONE"}'
+            AND comment = ''
+            AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy'}
+            AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+            AND dclocal_read_repair_chance = 0.1
+            AND default_time_to_live = 0
+            AND gc_grace_seconds = 864000
+            AND max_index_interval = 2048
+            AND memtable_flush_period_in_ms = 0
+            AND min_index_interval = 128
+            AND read_repair_chance = 0.0
+            AND speculative_retry = '99.0PERCENTILE';
+        """ + self.get_index_output('test_col_idx', 'test', 'test', 'col')
+
+        if has_val_idx:
+            return ret + "\n" + self.get_index_output('test_val_idx', 'test', 'test', 'val')
+        else:
+            return ret
+
+    def get_users_table_output(self):
+        return """
+        CREATE TABLE test.users (
+            userid text PRIMARY KEY,
+            age int,
+            firstname text,
+            lastname text
+        ) WITH bloom_filter_fp_chance = 0.01
+            AND caching = '{"keys":"ALL", "rows_per_partition":"NONE"}'
+            AND comment = ''
+            AND compaction = {'class': 'org.apache.cassandra.db.compaction.SizeTieredCompactionStrategy'}
+            AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
+            AND dclocal_read_repair_chance = 0.1
+            AND default_time_to_live = 0
+            AND gc_grace_seconds = 864000
+            AND max_index_interval = 2048
+            AND memtable_flush_period_in_ms = 0
+            AND min_index_interval = 128
+            AND read_repair_chance = 0.0
+            AND speculative_retry = '99.0PERCENTILE';
+        """ + self.get_index_output('myindex', 'test', 'users', 'age')
+
+    def get_index_output(self, index, ks, table, col):
+        return "CREATE INDEX {} ON {}.{} ({});".format(index, ks, table, col)
+
+    def execute(self, cql, expected_output=None, expected_err=None):
+        debug(cql)
+        node1, = self.cluster.nodelist()
+        output, err = self.run_cqlsh(node1, cql)
+
+        if err:
+            if expected_err:
+                err = err[10:]  # strip <stdin>:2:
+                self.check_response(err, expected_err)
+                return
+            else:
+                debug('{} returned error {}'.format(cql, err))
+                self.assertTrue(False)
+
+        if expected_output:
+            self.check_response(output, expected_output)
+
+        return output
+
+    def check_response(self, response, expected_response):
+        lines = [s.strip() for s in response.split("\n") if s.strip()]
+        expected_lines = [s.strip() for s in expected_response.split("\n") if s.strip()]
+        self.assertEqual(expected_lines, lines)
+
     def test_copy_to(self):
         self.cluster.populate(1).start()
         node1, = self.cluster.nodelist()
@@ -527,25 +723,22 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
 
         results = list(session.execute("SELECT * FROM testcopyto"))
 
-        tempfile = NamedTemporaryFile()
-        debug('Exporting to csv file: %s' % (tempfile.name,))
-        node1.run_cqlsh(cmds="COPY ks.testcopyto TO '%s'" % (tempfile.name,))
+        self.tempfile = NamedTemporaryFile(delete=False)
+        debug('Exporting to csv file: %s' % (self.tempfile.name,))
+        node1.run_cqlsh(cmds="COPY ks.testcopyto TO '%s'" % (self.tempfile.name,))
 
         # session
-        with open(tempfile.name, 'r') as csvfile:
+        with open(self.tempfile.name, 'r') as csvfile:
             row_count = 0
             csvreader = csv.reader(csvfile)
-            for cql_row, csv_row in zip(results, csvreader):
-                self.assertEquals(map(str, cql_row), csv_row)
-                row_count += 1
-
-            self.assertEquals(len(results), row_count)
+            result_list = [map(str, cql_row) for cql_row in results]
+            self.assertItemsEqual(result_list, csvreader)
 
         # import the CSV file with COPY FROM
         session.execute("TRUNCATE ks.testcopyto")
-        node1.run_cqlsh(cmds="COPY ks.testcopyto FROM '%s'" % (tempfile.name,))
+        node1.run_cqlsh(cmds="COPY ks.testcopyto FROM '%s'" % (self.tempfile.name,))
         new_results = list(session.execute("SELECT * FROM testcopyto"))
-        self.assertEquals(results, new_results)
+        self.assertItemsEqual(results, new_results)
 
     @since('2.1')
     def test_float_formatting(self):
@@ -555,7 +748,7 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
 
         node1, = self.cluster.nodelist()
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             CREATE KEYSPACE formatting WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             use formatting;
             create TABLE values ( part text, id int, val1 double, val2 float, PRIMARY KEY (part, id) );
@@ -631,7 +824,7 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
     + | 33 |  1.1111e+07 |  1.1111e+07
 """)
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             use formatting;
             insert into values (part, id, val1, val2) VALUES ('-', 1, -0.00000006, -0.00000006);
             insert into values (part, id, val1, val2) VALUES ('-', 2, -0.0000006, -0.0000006);
@@ -705,7 +898,7 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
     - | 33 |  -1.1111e+07 |  -1.1111e+07
 """)
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             use formatting;
             insert into values (part, id, val1, val2) VALUES ('0', 1, 0, 0);
             insert into values (part, id, val1, val2) VALUES ('0', 2, 0.000000000001, 0.000000000001);
@@ -733,14 +926,14 @@ VALUES (4, blobAsInt(0x), '', blobAsBigint(0x), 0x, blobAsBoolean(0x), blobAsDec
 
         node1, = self.cluster.nodelist()
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             CREATE KEYSPACE int_checks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             USE int_checks;
             CREATE TABLE values (part text, val1 int, val2 bigint, val3 smallint, val4 tinyint, PRIMARY KEY (part));
             INSERT INTO values (part, val1, val2, val3, val4) VALUES ('1', 1, 1, 1, 1);
             INSERT INTO values (part, val1, val2, val3, val4) VALUES ('0', 0, 0, 0, 0);
             INSERT INTO values (part, val1, val2, val3, val4) VALUES ('min', %d, %d, -32768, -128);
-            INSERT INTO values (part, val1, val2, val3, val4) VALUES ('max', %d, %d, 32767, 127)""" % (-1<<31, -1<<63, (1<<31) - 1, (1<<63) -1))
+            INSERT INTO values (part, val1, val2, val3, val4) VALUES ('max', %d, %d, 32767, 127)""" % (-1 << 31, -1 << 63, (1 << 31) - 1, (1 << 63) - 1))
 
         if len(stderr) > 0:
             debug(stderr)
@@ -772,7 +965,7 @@ CREATE TABLE int_checks.values (
 
         node1, = self.cluster.nodelist()
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             CREATE KEYSPACE datetime_checks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             USE datetime_checks;
             CREATE TABLE values (d date, t time, PRIMARY KEY (d, t));
@@ -783,8 +976,8 @@ CREATE TABLE int_checks.values (
             INSERT INTO values (d, t) VALUES ('%d-1-1', '01:00:00.000000000');
             INSERT INTO values (d, t) VALUES ('%d-1-1', '02:00:00.000000000');
             INSERT INTO values (d, t) VALUES ('%d-1-1', '03:00:00.000000000')"""
-            % (datetime.MINYEAR-1, datetime.MINYEAR, datetime.MAXYEAR, datetime.MAXYEAR+1,))
-            # outside the MIN and MAX range it should print the number of days from the epoch
+                                        % (datetime.MINYEAR - 1, datetime.MINYEAR, datetime.MAXYEAR, datetime.MAXYEAR + 1,))
+        # outside the MIN and MAX range it should print the number of days from the epoch
 
         if len(stderr) > 0:
             debug(stderr)
@@ -821,7 +1014,7 @@ CREATE TABLE datetime_checks.values (
 
         node1, = self.cluster.nodelist()
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             CREATE KEYSPACE tracing_checks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             USE tracing_checks;
             CREATE TABLE test (id int, val text, PRIMARY KEY (id));
@@ -855,7 +1048,7 @@ Tracing session:""")
 
         node1, = self.cluster.nodelist()
 
-        stdout, stderr = self.run_cqlsh(node1,cmds = """
+        stdout, stderr = self.run_cqlsh(node1, cmds="""
             CREATE KEYSPACE client_warnings WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
             USE client_warnings;
             CREATE TABLE test (id int, val text, PRIMARY KEY (id))""")
@@ -865,9 +1058,58 @@ Tracing session:""")
             assert False, "Failed to execute cqlsh"
 
         self.verify_output("USE client_warnings; BEGIN UNLOGGED BATCH INSERT INTO test (id, val) VALUES (1, 'abc') INSERT INTO test (id, val) VALUES (2, 'def') APPLY BATCH",
-                            node1, """
+                           node1, """
 Warnings :
 Unlogged batch covering 2 partitions detected against table [client_warnings.test]. You should use a logged batch for atomicity, or asynchronous writes for performance.""")
+
+    @since('2.1')
+    def test_connect_timeout(self):
+        """
+        @jira_ticket CASSANDRA-9601
+        """
+        self.cluster.populate(1)
+        self.cluster.start(wait_for_binary_proto=True)
+
+        node1, = self.cluster.nodelist()
+
+        stdout, stderr = self.run_cqlsh(node1, cmds='USE system', cqlsh_options=['--debug', '--connect-timeout=10'])
+        self.assertTrue("Using connect timeout: 10 seconds" in stderr)
+
+    def test_describe_round_trip(self):
+        """
+        @jira_ticket CASSANDRA-9064
+
+        Tests for the error reported in 9064 by:
+
+        - creating the table described in the bug report, using LCS,
+        - DESCRIBE-ing that table via cqlsh, then DROPping it,
+        - running the output of the DESCRIBE statement as a CREATE TABLE statement, and
+        - inserting a value into the table.
+
+        The final two steps of the test should not fall down. If one does, that
+        indicates the output of DESCRIBE is not a correct CREATE TABLE statement.
+        """
+        self.cluster.populate(1)
+        self.cluster.start(wait_for_binary_proto=True)
+        node1, = self.cluster.nodelist()
+        session = self.patient_cql_connection(node1)
+
+        self.create_ks(session, 'test_ks', 1)
+        session.execute("CREATE TABLE lcs_describe (key int PRIMARY KEY) WITH compaction = "
+                        "{'class': 'LeveledCompactionStrategy'}")
+        describe_out, describe_err = self.run_cqlsh(node1, 'DESCRIBE TABLE test_ks.lcs_describe')
+
+        session.execute('DROP TABLE test_ks.lcs_describe')
+
+        create_statement = 'USE test_ks; ' + ' '.join(describe_out.splitlines())
+        create_out, create_err = self.run_cqlsh(node1, create_statement)
+
+        # these statements shouldn't fall down
+        reloaded_describe_out, reloaded_describe_err = self.run_cqlsh(node1, 'DESCRIBE TABLE test_ks.lcs_describe')
+        session.execute('INSERT INTO lcs_describe (key) VALUES (1)')
+
+        # the table created before and after should be the same
+        self.assertEqual(reloaded_describe_out, describe_out)
 
     def run_cqlsh(self, node, cmds, cqlsh_options=[]):
         cdir = node.get_install_dir()
@@ -880,9 +1122,9 @@ Unlogged batch covering 2 partitions detected against table [client_warnings.tes
         else:
             host = node.network_interfaces['thrift'][0]
             port = node.network_interfaces['thrift'][1]
-        args = cqlsh_options + [ host, str(port) ]
+        args = cqlsh_options + [host, str(port)]
         sys.stdout.flush()
-        p = subprocess.Popen([ cli ] + args, env=env, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        p = subprocess.Popen([cli] + args, env=env, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         for cmd in cmds.split(';'):
             p.stdin.write(cmd + ';\n')
         p.stdin.write("quit;\n")
@@ -897,20 +1139,20 @@ class CqlshSmokeTest(Tester):
         super(CqlshSmokeTest, self).setUp()
         self.cluster.populate(1).start(wait_for_binary_proto=True)
         [self.node1] = self.cluster.nodelist()
-        self.cursor = self.patient_cql_connection(self.node1)
+        self.session = self.patient_cql_connection(self.node1)
 
     def test_uuid(self):
         """
         the `uuid()` function can generate UUIDs from cqlsh.
         """
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', key_type='uuid', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', key_type='uuid', columns={'i': 'int'})
 
         out, err = self.node1.run_cqlsh("INSERT INTO ks.test (key) VALUES (uuid())",
                                         return_output=True)
         self.assertEqual(err, "")
 
-        result = self.cursor.execute("SELECT key FROM ks.test")
+        result = self.session.execute("SELECT key FROM ks.test")
         self.assertEqual(len(result), 1)
         self.assertEqual(len(result[0]), 1)
         self.assertIsInstance(result[0][0], UUID)
@@ -919,7 +1161,7 @@ class CqlshSmokeTest(Tester):
                                         return_output=True)
         self.assertEqual(err, "")
 
-        result = self.cursor.execute("SELECT key FROM ks.test")
+        result = self.session.execute("SELECT key FROM ks.test")
         self.assertEqual(len(result), 2)
         self.assertEqual(len(result[0]), 1)
         self.assertEqual(len(result[1]), 1)
@@ -928,8 +1170,8 @@ class CqlshSmokeTest(Tester):
         self.assertNotEqual(result[0][0], result[1][0])
 
     def test_commented_lines(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test')
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test')
 
         self.node1.run_cqlsh(
             """
@@ -945,22 +1187,22 @@ class CqlshSmokeTest(Tester):
         self.assertTrue(out.strip().startswith("CREATE KEYSPACE ks"))
 
     def test_colons_in_string_literals(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
 
         self.node1.run_cqlsh(
             """
             INSERT INTO ks.test (key) VALUES ('Cassandra:TheMovie');
             """)
-        assert_all(self.cursor, "SELECT key FROM test",
+        assert_all(self.session, "SELECT key FROM test",
                    [[u'Cassandra:TheMovie']])
 
     def test_select(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test')
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test')
 
-        self.cursor.execute("INSERT INTO ks.test (key, c, v) VALUES ('a', 'a', 'a')")
-        assert_all(self.cursor, "SELECT key, c, v FROM test",
+        self.session.execute("INSERT INTO ks.test (key, c, v) VALUES ('a', 'a', 'a')")
+        assert_all(self.session, "SELECT key, c, v FROM test",
                    [[u'a', u'a', u'a']])
 
         out, err = self.node1.run_cqlsh("SELECT key, c, v FROM ks.test",
@@ -973,41 +1215,41 @@ class CqlshSmokeTest(Tester):
         self.assertEqual(err, '')
 
     def test_insert(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test')
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test')
 
         self.node1.run_cqlsh("INSERT INTO ks.test (key, c, v) VALUES ('a', 'a', 'a')")
-        assert_all(self.cursor, "SELECT key, c, v FROM test", [[u"a", u"a", u"a"]])
+        assert_all(self.session, "SELECT key, c, v FROM test", [[u"a", u"a", u"a"]])
 
     def test_update(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test')
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test')
 
-        self.cursor.execute("INSERT INTO test (key, c, v) VALUES ('a', 'a', 'a')")
-        assert_all(self.cursor, "SELECT key, c, v FROM test", [[u"a", u"a", u"a"]])
+        self.session.execute("INSERT INTO test (key, c, v) VALUES ('a', 'a', 'a')")
+        assert_all(self.session, "SELECT key, c, v FROM test", [[u"a", u"a", u"a"]])
         self.node1.run_cqlsh("UPDATE ks.test SET v = 'b' WHERE key = 'a' AND c = 'a'")
-        assert_all(self.cursor, "SELECT key, c, v FROM test", [[u"a", u"a", u"b"]])
+        assert_all(self.session, "SELECT key, c, v FROM test", [[u"a", u"a", u"b"]])
 
     def test_delete(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
 
-        self.cursor.execute("INSERT INTO test (key) VALUES ('a')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('b')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('c')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('d')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('e')")
-        assert_all(self.cursor, 'SELECT key from test',
+        self.session.execute("INSERT INTO test (key) VALUES ('a')")
+        self.session.execute("INSERT INTO test (key) VALUES ('b')")
+        self.session.execute("INSERT INTO test (key) VALUES ('c')")
+        self.session.execute("INSERT INTO test (key) VALUES ('d')")
+        self.session.execute("INSERT INTO test (key) VALUES ('e')")
+        assert_all(self.session, 'SELECT key from test',
                    [[u'a'], [u'c'], [u'e'], [u'd'], [u'b']])
 
         self.node1.run_cqlsh("DELETE FROM ks.test WHERE key = 'c'")
 
-        assert_all(self.cursor, 'SELECT key from test',
+        assert_all(self.session, 'SELECT key from test',
                    [[u'a'], [u'e'], [u'd'], [u'b']])
 
     def test_batch(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
         # run batch statement (inserts are fine)
         self.node1.run_cqlsh(
             '''
@@ -1018,7 +1260,7 @@ class CqlshSmokeTest(Tester):
             APPLY BATCH;
             ''')
         # make sure everything inserted is actually there
-        assert_all(self.cursor, 'SELECT key FROM ks.test',
+        assert_all(self.session, 'SELECT key FROM ks.test',
                    [[u'eggs'], [u'spam'], [u'sausage']])
 
     def test_create_keyspace(self):
@@ -1028,7 +1270,7 @@ class CqlshSmokeTest(Tester):
         self.assertIn(u'created', self.get_keyspace_names())
 
     def test_drop_keyspace(self):
-        self.create_ks(self.cursor, 'ks', 1)
+        self.create_ks(self.session, 'ks', 1)
         self.assertIn(u'ks', self.get_keyspace_names())
 
         self.node1.run_cqlsh('DROP KEYSPACE ks')
@@ -1036,63 +1278,65 @@ class CqlshSmokeTest(Tester):
         self.assertNotIn(u'ks', self.get_keyspace_names())
 
     def test_create_table(self):
-        self.create_ks(self.cursor, 'ks', 1)
+        self.create_ks(self.session, 'ks', 1)
 
         self.node1.run_cqlsh('CREATE TABLE ks.test (i int PRIMARY KEY);')
         self.assertEquals(self.get_tables_in_keyspace('ks'), [u'test'])
 
     def test_drop_table(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test')
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test')
 
-        assert_none(self.cursor, 'SELECT key FROM test')
+        assert_none(self.session, 'SELECT key FROM test')
 
         self.node1.run_cqlsh('DROP TABLE ks.test;')
-        result = rows_to_list(self.cursor.execute("SELECT columnfamily_name FROM system.schema_columnfamilies WHERE keyspace_name='ks';"))
-        self.assertEqual([], result)
+        self.session.cluster.refresh_schema_metadata()
+
+        self.assertEqual(0, len(self.session.cluster.metadata.keyspaces['ks'].tables))
 
     def test_truncate(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
 
-        self.cursor.execute("INSERT INTO test (key) VALUES ('a')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('b')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('c')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('d')")
-        self.cursor.execute("INSERT INTO test (key) VALUES ('e')")
-        assert_all(self.cursor, 'SELECT key from test',
+        self.session.execute("INSERT INTO test (key) VALUES ('a')")
+        self.session.execute("INSERT INTO test (key) VALUES ('b')")
+        self.session.execute("INSERT INTO test (key) VALUES ('c')")
+        self.session.execute("INSERT INTO test (key) VALUES ('d')")
+        self.session.execute("INSERT INTO test (key) VALUES ('e')")
+        assert_all(self.session, 'SELECT key from test',
                    [[u'a'], [u'c'], [u'e'], [u'd'], [u'b']])
 
         self.node1.run_cqlsh('TRUNCATE ks.test;')
-        self.assertEqual([], rows_to_list(self.cursor.execute('SELECT * from test')))
+        self.assertEqual([], rows_to_list(self.session.execute('SELECT * from test')))
 
     def test_alter_table(self):
-        self.create_ks(self.cursor, 'ks', 1, )
-        self.create_cf(self.cursor, 'test', columns={'i': 'ascii'})
+        self.create_ks(self.session, 'ks', 1, )
+        self.create_cf(self.session, 'test', columns={'i': 'ascii'})
 
         def get_ks_columns():
-            return rows_to_list(self.cursor.execute(
-                "SELECT columnfamily_name, column_name, validator FROM system.schema_columns WHERE keyspace_name='ks';"
-            ))
+            table = self.session.cluster.metadata.keyspaces['ks'].tables['test']
+
+            return [[table.name, column.name, column.data_type.cassname] for column in table.columns.values()]
 
         old_column_spec = [u'test', u'i',
-                           u'org.apache.cassandra.db.marshal.AsciiType']
+                           u'AsciiType']
         self.assertIn(old_column_spec, get_ks_columns())
 
         self.node1.run_cqlsh('ALTER TABLE ks.test ALTER i TYPE text;')
+        self.session.cluster.refresh_table_metadata("ks", "test")
 
         new_columns = get_ks_columns()
         self.assertNotIn(old_column_spec, new_columns)
         self.assertIn([u'test', u'i',
-                       u'org.apache.cassandra.db.marshal.UTF8Type'],
+                       u'UTF8Type'],
                       new_columns)
 
     def test_use_keyspace(self):
         # ks1 contains ks1table, ks2 contains ks2table
-        self.create_ks(self.cursor, 'ks1', 1)
-        self.create_cf(self.cursor, 'ks1table')
-        self.create_ks(self.cursor, 'ks2', 1)
-        self.create_cf(self.cursor, 'ks2table')
+        self.create_ks(self.session, 'ks1', 1)
+        self.create_cf(self.session, 'ks1table')
+        self.create_ks(self.session, 'ks2', 1)
+        self.create_cf(self.session, 'ks2table')
 
         ks1_stdout, ks1_stderr = self.node1.run_cqlsh(
             '''
@@ -1115,21 +1359,21 @@ class CqlshSmokeTest(Tester):
     # DROP INDEX statement fails in 2.0 (see CASSANDRA-9247)
     @since('2.1')
     def test_drop_index(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
 
         # create a statement that will only work if there's an index on i
         requires_index = 'SELECT * from test WHERE i = 5'
 
         def execute_requires_index():
-            return self.cursor.execute(requires_index)
+            return self.session.execute(requires_index)
 
         # make sure it fails as expected
         self.assertRaises(InvalidRequest, execute_requires_index)
 
         # make sure it doesn't fail when an index exists
-        self.cursor.execute('CREATE INDEX index_to_drop ON test (i);')
-        assert_none(self.cursor, requires_index)
+        self.session.execute('CREATE INDEX index_to_drop ON test (i);')
+        assert_none(self.session, requires_index)
 
         # drop the index via cqlsh, then make sure it fails
         self.node1.run_cqlsh('DROP INDEX ks.index_to_drop;')
@@ -1138,37 +1382,34 @@ class CqlshSmokeTest(Tester):
     # DROP INDEX statement fails in 2.0 (see CASSANDRA-9247)
     @since('2.1')
     def test_create_index(self):
-        self.create_ks(self.cursor, 'ks', 1)
-        self.create_cf(self.cursor, 'test', columns={'i': 'int'})
+        self.create_ks(self.session, 'ks', 1)
+        self.create_cf(self.session, 'test', columns={'i': 'int'})
 
         # create a statement that will only work if there's an index on i
         requires_index = 'SELECT * from test WHERE i = 5;'
 
         def execute_requires_index():
-            return self.cursor.execute(requires_index)
+            return self.session.execute(requires_index)
 
         # make sure it fails as expected
         self.assertRaises(InvalidRequest, execute_requires_index)
 
         # make sure index exists after creating via cqlsh
         self.node1.run_cqlsh('CREATE INDEX index_to_drop ON ks.test (i);')
-        assert_none(self.cursor, requires_index)
+        assert_none(self.session, requires_index)
 
         # drop the index, then make sure it fails again
-        self.cursor.execute('DROP INDEX ks.index_to_drop;')
+        self.session.execute('DROP INDEX ks.index_to_drop;')
         self.assertRaises(InvalidRequest, execute_requires_index)
 
     def get_keyspace_names(self):
-        return [x[0] for x in
-                rows_to_list(self.cursor.execute(
-                    'SELECT keyspace_name from system.schema_keyspaces'))]
+        self.session.cluster.refresh_schema_metadata()
+        return [ks.name for ks in self.session.cluster.metadata.keyspaces.values()]
 
-    def get_tables_in_keyspace(self, keyspace=None):
-        cmd = "SELECT columnfamily_name FROM system.schema_columnfamilies"
-        cmd += " WHERE keyspace_name='{keyspace}'".format(keyspace=keyspace) if keyspace else ""
-        cmd += ";"
+    def get_tables_in_keyspace(self, keyspace):
+        self.session.cluster.refresh_schema_metadata()
+        return [table.name for table in self.session.cluster.metadata.keyspaces[keyspace].tables.values()]
 
-        return [x[0] for x in rows_to_list(self.cursor.execute(cmd))]
 
 class CqlLoginTest(Tester):
     """
@@ -1176,17 +1417,17 @@ class CqlLoginTest(Tester):
     """
     def setUp(self):
         super(CqlLoginTest, self).setUp()
-        config = {'authenticator' : 'org.apache.cassandra.auth.PasswordAuthenticator'}
+        config = {'authenticator': 'org.apache.cassandra.auth.PasswordAuthenticator'}
         self.cluster.set_configuration_options(values=config)
         self.cluster.populate(1).start(wait_for_binary_proto=True)
         [self.node1] = self.cluster.nodelist()
         self.node1.watch_log_for('Created default superuser')
-        self.cursor = self.patient_cql_connection(self.node1, user='cassandra', password='cassandra')
+        self.session = self.patient_cql_connection(self.node1, user='cassandra', password='cassandra')
 
     def test_login_keeps_keyspace(self):
-        self.create_ks(self.cursor, 'ks1', 1)
-        self.create_cf(self.cursor, 'ks1table')
-        self.cursor.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
+        self.create_ks(self.session, 'ks1', 1)
+        self.create_cf(self.session, 'ks1table')
+        self.session.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
 
         cqlsh_stdout, cqlsh_stderr = self.node1.run_cqlsh(
             '''
@@ -1201,9 +1442,9 @@ class CqlLoginTest(Tester):
         self.assertEqual(cqlsh_stderr, '')
 
     def test_login_rejects_bad_pass(self):
-        self.create_ks(self.cursor, 'ks1', 1)
-        self.create_cf(self.cursor, 'ks1table')
-        self.cursor.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
+        self.create_ks(self.session, 'ks1', 1)
+        self.create_cf(self.session, 'ks1table')
+        self.session.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
 
         cqlsh_stdout, cqlsh_stderr = self.node1.run_cqlsh(
             '''
@@ -1214,9 +1455,9 @@ class CqlLoginTest(Tester):
         self.assertEqual(['''Username and/or password are incorrect''' in x for x in cqlsh_stderr.split("\n") if x], [True])
 
     def test_login_authenticates_correct_user(self):
-        self.create_ks(self.cursor, 'ks1', 1)
-        self.create_cf(self.cursor, 'ks1table')
-        self.cursor.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
+        self.create_ks(self.session, 'ks1', 1)
+        self.create_cf(self.session, 'ks1table')
+        self.session.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
 
         if self.cluster.version() >= '2.2':
             query = '''
@@ -1245,9 +1486,9 @@ class CqlLoginTest(Tester):
                       expected_error, '\n'.join(err_lines))
 
     def test_login_allows_bad_pass_and_continued_use(self):
-        self.create_ks(self.cursor, 'ks1', 1)
-        self.create_cf(self.cursor, 'ks1table')
-        self.cursor.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
+        self.create_ks(self.session, 'ks1', 1)
+        self.create_cf(self.session, 'ks1table')
+        self.session.execute("CREATE USER user1 WITH PASSWORD 'changeme';")
 
         cqlsh_stdout, cqlsh_stderr = self.node1.run_cqlsh(
             '''
