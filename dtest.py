@@ -167,6 +167,7 @@ class Tester(TestCase):
         self.var_debug(cluster)
         self.var_trace(cluster)
 
+<<<<<<< HEAD
     # Pauses flow of the test until a certain message is seen in the log.
     # Here are a few:
     # CQL command with Create TABLE - "Initializing"
@@ -195,6 +196,8 @@ class Tester(TestCase):
     def compaction(self, node, time):
         node.compaction(time)
 
+=======
+>>>>>>> 0edeb4284c78aaafeb4dd18f7593b0ef4c2e3c19
     def _cleanup_cluster(self):
         if SILENCE_DRIVER_ON_SHUTDOWN:
             # driver logging is very verbose when nodes start going down -- bump up the level
