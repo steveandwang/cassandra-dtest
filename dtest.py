@@ -11,6 +11,7 @@ from cassandra.cluster import Cluster as PyCluster
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.policies import WhiteListRoundRobinPolicy
 
+
 LOG_SAVED_DIR="logs"
 try:
     os.mkdir(LOG_SAVED_DIR)
@@ -166,6 +167,34 @@ class Tester(TestCase):
             cluster.set_log_level("TRACE")
         self.var_debug(cluster)
         self.var_trace(cluster)
+
+    # Pauses flow of the test until a certain message is seen in the log.
+    # Here are a few:
+    # CQL command with Create TABLE - "Initializing"
+    # CQL command with Create KEYSPACE - "Create new Keyspace"
+    # Move - "MOVING"
+    def wait_till_msg(self, node, first_fun, msg, *args, **kwargs):
+        first_fun(*args, **kwargs)
+        while not node.watch_log_for(msg):
+            continue
+
+    # Changes in the key cache capacity indicates that a function is still running, so by checking whether
+    # the JMX value remained unchanged, we know when the process has stopped.
+    def wait_till_no_log_messages(self, node, attributes = ['db', 'Caches', 'KeyCacheCapacityInMB']):
+        with JolokiaAgent(node) as jmx:
+            mbean = make_mbean(attributes[0], attributes[1])
+            moved = False
+            before = None
+            while not moved:
+                after = jmx.read_attribute(mbean, attributes[2])
+                if before == after:
+                    moved = True
+                before = after
+                time.sleep(0.2)
+
+    # Determines when node.compact is still running.
+    def compaction(self, node, time):
+        node.compaction(time)
 
     def _cleanup_cluster(self):
         if SILENCE_DRIVER_ON_SHUTDOWN:
