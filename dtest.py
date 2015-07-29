@@ -182,7 +182,7 @@ class Tester(TestCase):
 
     # Changes in the key cache capacity indicates that a function is still running, so by checking whether
     # the JMX value remained unchanged, we know when the process has stopped.
-    def wait_till_no_jmx_changes(self, node, package='db', mbean_type='Caches', value='KeyCacheCapacityInMB', scope = None, name=None):
+    def wait_till_no_jmx_changes(self, node, package='db', mbean_type='Caches', value='KeyCacheCapacityInMB', scope=None, name=None):
         with JolokiaAgent(node) as jmx:
             if name:
                 if scope:
