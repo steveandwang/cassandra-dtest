@@ -10,6 +10,7 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.cluster import Cluster as PyCluster
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.policies import WhiteListRoundRobinPolicy
+from jmxutils import JolokiaAgent, make_mbean
 
 
 LOG_SAVED_DIR="logs"
@@ -181,13 +182,19 @@ class Tester(TestCase):
 
     # Changes in the key cache capacity indicates that a function is still running, so by checking whether
     # the JMX value remained unchanged, we know when the process has stopped.
-    def wait_till_no_jmx_changes(self, node, attributes = ['db', 'Caches', 'KeyCacheCapacityInMB']):
+    def wait_till_no_jmx_changes(self, node, package='db', mbean_type='Caches', value='KeyCacheCapacityInMB', scope = None, name=None):
         with JolokiaAgent(node) as jmx:
-            mbean = make_mbean(attributes[0], attributes[1])
+            if name:
+                if scope:
+                    mbean = make_mbean(package, mbean_type, scope=scope, name=name)
+                else:
+                    mbean = make_mbean(package, mbean_type, name=name)
+            else:
+                mbean = make_mbean(package, mbean_type)
             moved = False
             before = None
             while not moved:
-                after = jmx.read_attribute(mbean, attributes[2])
+                after = jmx.read_attribute(mbean, value)
                 if before == after:
                     moved = True
                 before = after
